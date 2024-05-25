@@ -725,7 +725,8 @@ int ObjectRef::l_set_attach(lua_State *L)
 	sao->getAttachment(&parent_id, &bone, &position, &rotation, &force_visible);
 	if (parent_id) {
 		ServerActiveObject *old_parent = env->getActiveObject(parent_id);
-		old_parent->removeAttachmentChild(sao->getId());
+		if (old_parent != NULL)
+			old_parent->removeAttachmentChild(sao->getId());
 	}
 
 	bone          = readParam<std::string>(L, 3, "");
