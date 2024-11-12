@@ -13,7 +13,7 @@ struct CraftReplacements;
 
 class ModApiCraft : public ModApiBase {
 private:
-	static int l_register_craft(lua_State *L);
+	static int l_register_craft2(lua_State *L);
 	static int l_get_craft_recipe(lua_State *L);
 	static int l_get_all_craft_recipes(lua_State *L);
 	static int l_get_craft_result(lua_State *L);

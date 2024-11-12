@@ -114,7 +114,7 @@ bool ModApiCraft::readCraftReplacements(lua_State *L, int index,
 	return true;
 }
 // register_craft({output=item, recipe={{item00,item10},{item01,item11}})
-int ModApiCraft::l_register_craft(lua_State *L)
+int ModApiCraft::l_register_craft2(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 	//infostream<<"register_craft"<<std::endl;
@@ -507,7 +507,7 @@ void ModApiCraft::Initialize(lua_State *L, int top)
 	API_FCT(get_all_craft_recipes);
 	API_FCT(get_craft_recipe);
 	API_FCT(get_craft_result);
-	API_FCT(register_craft);
+	API_FCT(register_craft2);
 	API_FCT(clear_craft);
 }
 

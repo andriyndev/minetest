@@ -1356,3 +1356,52 @@ core.register_chatcommand("kill", {
 		return handle_kill_command(name, param == "" and name or param)
 	end,
 })
+
+function core.register_craft(recipe)
+	local converted_recipe = {
+		items = {}
+	}
+	if recipe.type == "cooking" or recipe.type == "fuel" then
+		assert(type(recipe.recipe) == "string")
+		converted_recipe.method = recipe.type
+		converted_recipe.width = 1
+		table.insert(converted_recipe.items, ItemStack(recipe.recipe))
+	elseif recipe.type == "toolrepair" then
+		-- Ignore the "toolrepair" recipes, since we're just testing
+		return
+	elseif recipe.type == "shapeless" then
+		assert(type(recipe.recipe) == "table")
+		for _, ingr in ipairs(recipe.recipe) do
+			assert(type(ingr) == "string")
+			table.insert(converted_recipe.items, ItemStack(ingr))
+		end
+		converted_recipe.width = #converted_recipe.items
+		converted_recipe.method = "normal"
+	else
+		converted_recipe.method = "normal"
+		local width = 0
+		assert(type(recipe.recipe) == "table")
+		for _, row in ipairs(recipe.recipe) do
+			assert(type(row) == "table")
+			if width == 0 then
+				width = #row
+			else
+				assert(width == #row)
+			end
+			for _, ingr in ipairs(row) do
+				assert(type(ingr) == "string")
+				table.insert(converted_recipe.items, ItemStack(ingr))
+			end
+		end
+		converted_recipe.width = width
+	end
+
+	assert(#converted_recipe.items <= 9)
+
+	local output, _ = core.get_craft_result(converted_recipe)
+	if not output.item:is_empty() then
+		core.log("error", "Duplicated recipe: " .. dump(recipe))
+	end
+
+	core.register_craft2(recipe)
+end
