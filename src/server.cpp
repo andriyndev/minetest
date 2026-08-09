@@ -1574,6 +1574,25 @@ void Server::SendNodeDef(session_t peer_id,
 	Send(&pkt);
 }
 
+void Server::SendNodeModifier(session_t peer_id,
+	const NodeModifierManager *nodemod_mgr, u16 protocol_version)
+{
+	NetworkPacket pkt(TOCLIENT_NODEMOD, 0, peer_id);
+
+	std::ostringstream tmp_os2(std::ios::binary);
+	{
+		std::ostringstream tmp_os(std::ios::binary);
+		nodemod_mgr->serialize(tmp_os, protocol_version);
+		compressZstd(tmp_os.str(), tmp_os2);
+	}
+	pkt.putLongString(tmp_os2.str());
+
+	verbosestream << "Server: Sending node modifier definitions to id(" << peer_id
+			<< "): size=" << pkt.getSize() << std::endl;
+
+	Send(&pkt);
+}
+
 /*
 	Non-static send methods
 */
@@ -4006,6 +4025,11 @@ ICraftDefManager *Server::getCraftDefManager()
 	return m_craftdef;
 }
 
+const NodeModifierManager* Server::getNodeModifierManager()
+{
+	return &m_nodemod;
+}
+
 u16 Server::allocateUnknownNodeId(const std::string &name)
 {
 	return m_nodedef->allocateDummy(name);
@@ -4019,6 +4043,11 @@ IWritableItemDefManager *Server::getWritableItemDefManager()
 NodeDefManager *Server::getWritableNodeDefManager()
 {
 	return m_nodedef;
+}
+
+NodeModifierManager *Server::getWritableNodeModifierManager()
+{
+	return &m_nodemod;
 }
 
 IWritableCraftDefManager *Server::getWritableCraftDefManager()

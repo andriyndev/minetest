@@ -233,6 +233,30 @@ void MapBlock::copyFrom(const VoxelManipulator &src)
 	tryShrinkNodes();
 }
 
+void MapBlock::getNodeModifiersAndAddToMap(std::map<v3s16, NodeModifier*> &dst)
+{
+	const NodeDefManager *nodedef = m_gamedef->ndef();
+	const NodeModifierManager *nodemod = m_gamedef->getNodeModifierManager();
+
+	for(s16 z=0; z<MAP_BLOCKSIZE; z++)
+	for(s16 y=0; y<MAP_BLOCKSIZE; y++)
+	for(s16 x=0; x<MAP_BLOCKSIZE; x++) {
+		v3s16 p(x, y, z);
+		const ContentFeatures &f = nodedef->get(getNodeNoEx(p).getContent());
+		if (f.node_modifier_meta_field != "") {
+			NodeMetadata *nm = m_node_metadata.get(p);
+			if (nm) {
+				std::string node_modifier_name = nm->getString(f.node_modifier_meta_field);
+				if (node_modifier_name != "") {
+					NodeModifier *node_modifier = nodemod->get(node_modifier_name);
+					if (node_modifier)
+						dst[m_pos_relative + p] = node_modifier;
+				}
+			}
+		}
+	}
+}
+
 void MapBlock::reallocate(u32 count, MapNode n)
 {
 	assert(count == 1 || count == nodecount);

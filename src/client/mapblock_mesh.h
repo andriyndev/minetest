@@ -11,6 +11,7 @@
 
 #include "util/numeric.h"
 #include "client/tile.h"
+#include "node_modifier.h"
 #include "voxel.h"
 #include <map>
 
@@ -52,6 +53,8 @@ struct MeshMakeData
 	bool m_enable_waving_water = false;
 
 	const NodeDefManager *m_nodedef;
+
+	std::map<v3s16, NodeModifier*> m_node_modifiers;
 
 	MeshMakeData(const NodeDefManager *ndef, u16 side_lingth, MeshGrid mesh_grid);
 

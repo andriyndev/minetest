@@ -232,8 +232,10 @@ void MeshUpdateQueue::fillDataFromMapBlocks(QueuedMeshUpdate *q)
 
 	// NOTE: the "data race" mentioned by MapBlock::tryShrinkNodes() is right here
 	for (auto *block : q->map_blocks) {
-		if (block)
+		if (block) {
 			block->copyTo(data->m_vmanip);
+			block->getNodeModifiersAndAddToMap(data->m_node_modifiers);
+		}
 	}
 
 	data->setCrack(q->crack_level, q->crack_pos);

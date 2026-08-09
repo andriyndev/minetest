@@ -11,6 +11,7 @@
 #include "constants.h"
 #include "staticobject.h"
 #include "nodemetadata.h" // NodeMetadataList
+#include "node_modifier.h"
 #include "nodetimer.h"
 #include "modifiedstate.h"
 #include "util/numeric.h" // getContainerPos
@@ -286,6 +287,8 @@ public:
 
 	// Copies data from VoxelManipulator to getPosRelative()
 	void copyFrom(const VoxelManipulator &src);
+
+	void getNodeModifiersAndAddToMap(std::map<v3s16, NodeModifier*> &dst);
 
 	// Update is air flag.
 	// Sets m_is_air to appropriate value.

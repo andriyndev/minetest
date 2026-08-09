@@ -30,6 +30,7 @@ public:
 	virtual IItemDefManager* getItemDefManager()=0;
 	virtual const NodeDefManager* getNodeDefManager()=0;
 	virtual ICraftDefManager* getCraftDefManager()=0;
+	virtual const NodeModifierManager* getNodeModifierManager()=0;
 
 	// Used for keeping track of names/ids of unknown nodes
 	virtual u16 allocateUnknownNodeId(const std::string &name)=0;
