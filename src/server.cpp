@@ -294,6 +294,7 @@ Server::Server(
 	m_con(con::createMTP(/*is_server=*/true, std::move(socket), this)),
 	m_itemdef(createItemDefManager()),
 	m_nodedef(createNodeDefManager()),
+	m_nodemod(createNodeModifierManager()),
 	m_craftdef(createCraftDefManager()),
 	m_thread(new ServerThread(this)),
 	m_clients(m_con),
@@ -4027,7 +4028,7 @@ ICraftDefManager *Server::getCraftDefManager()
 
 const NodeModifierManager* Server::getNodeModifierManager()
 {
-	return &m_nodemod;
+	return m_nodemod;
 }
 
 u16 Server::allocateUnknownNodeId(const std::string &name)
@@ -4047,7 +4048,7 @@ NodeDefManager *Server::getWritableNodeDefManager()
 
 NodeModifierManager *Server::getWritableNodeModifierManager()
 {
-	return &m_nodemod;
+	return m_nodemod;
 }
 
 IWritableCraftDefManager *Server::getWritableCraftDefManager()

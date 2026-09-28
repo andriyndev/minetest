@@ -499,7 +499,7 @@ function core.register_node_modifier(name, def)
 		error("Unable to register node modifier: name is not a string")
 	end
 	name = check_modname_prefix(name)
-	if type(def) ~= table then
+	if type(def) ~= "table" then
 		error("Unable to register node modifier: def is not a table")
 	end
 

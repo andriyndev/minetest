@@ -516,7 +516,7 @@ video::SColor NodeVisuals::getColor(const ContentFeatures &f, u8 param2) const
 	return f.color;
 }
 
-void NodeVisuals::fillNodeVisuals(NodeDefManager *ndef, Client *client, void *progress_callback_args)
+void NodeVisuals::fillNodeVisuals(NodeDefManager *ndef, NodeModifierManager *nmod, Client *client, void *progress_callback_args)
 {
 	infostream << "fillNodeVisuals: Updating "
 			"textures in node definitions" << std::endl;
@@ -526,14 +526,16 @@ void NodeVisuals::fillNodeVisuals(NodeDefManager *ndef, Client *client, void *pr
 	tsettings.readSettings();
 
 	tsrc->setImageCaching(true);
-	const u32 size = ndef->size();
+	const u32 size = ndef->size() + nmod->size();
 
-	/* collect all textures we might use */
 	std::unordered_set<std::string> pool;
-	ndef->applyFunction([&](ContentFeatures &f) {
+	auto preUpdTexFunc = [&](ContentFeatures &f) {
 		f.visuals = std::make_unique<NodeVisuals>();
 		f.visuals->preUpdateTextures(f, tsrc, pool, tsettings);
-	});
+	};
+	/* collect all textures we might use */
+	ndef->applyFunction(preUpdTexFunc);
+	nmod->applyFunction(preUpdTexFunc);
 
 	/* texture pre-loading stage */
 	const size_t arraymax = getArrayTextureMax(shdsrc);
@@ -592,7 +594,7 @@ void NodeVisuals::fillNodeVisuals(NodeDefManager *ndef, Client *client, void *pr
 
 	/* final step */
 	u32 progress = 0;
-	ndef->applyFunction([&](ContentFeatures &f) {
+	auto updTexFunc = [&](ContentFeatures &f) {
 		auto &v = f.visuals;
 		v->updateTextures(f, tsrc, shdsrc, client, &plt, tsettings);
 
@@ -605,7 +607,9 @@ void NodeVisuals::fillNodeVisuals(NodeDefManager *ndef, Client *client, void *pr
 		client->showUpdateProgressTexture(progress_callback_args,
 				0.66666f + 0.33333f * progress / size);
 		progress++;
-	});
+	};
+	ndef->applyFunction(updTexFunc);
+	nmod->applyFunction(updTexFunc);
 
 	SORT_AND_UNIQUE(ndef->m_leaves_materials);
 	verbosestream << "m_leaves_materials.size() = " << ndef->m_leaves_materials.size()

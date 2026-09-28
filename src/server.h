@@ -340,7 +340,7 @@ public:
 
 	IWritableItemDefManager* getWritableItemDefManager();
 	NodeDefManager* getWritableNodeDefManager();
-	NodeModifierManager *Server::getWritableNodeModifierManager();
+	NodeModifierManager *getWritableNodeModifierManager();
 	IWritableCraftDefManager* getWritableCraftDefManager();
 
 	// Not under envlock
@@ -720,7 +720,7 @@ private:
 	// Node definition manager
 	NodeDefManager *m_nodedef;
 
-	NodeModifierManager m_nodemod;
+	NodeModifierManager *m_nodemod;
 
 	// Craft definition manager
 	IWritableCraftDefManager *m_craftdef;

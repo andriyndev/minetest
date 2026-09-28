@@ -119,6 +119,7 @@ public:
 			IWritableShaderSource *shsrc,
 			IWritableItemDefManager *itemdef,
 			NodeDefManager *nodedef,
+			NodeModifierManager *nodemod,
 			ISoundManager *sound,
 			MtEventManager *event,
 			RenderingEngine *rendering_engine,
@@ -373,6 +374,7 @@ public:
 	bool isClient() override { return true; }
 	IItemDefManager* getItemDefManager() override;
 	const NodeDefManager* getNodeDefManager() override;
+	const NodeModifierManager *getNodeModifierManager() override;
 	ICraftDefManager* getCraftDefManager() override;
 	ITextureSource* getTextureSource();
 	virtual IWritableShaderSource* getShaderSource();
@@ -507,7 +509,7 @@ private:
 	IWritableShaderSource *m_shsrc;
 	IWritableItemDefManager *m_itemdef;
 	NodeDefManager *m_nodedef;
-	NodeModifierManager m_nodemod;
+	NodeModifierManager *m_nodemod;
 	ISoundManager *m_sound;
 	MtEventManager *m_event;
 	RenderingEngine *m_rendering_engine;

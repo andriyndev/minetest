@@ -7,6 +7,7 @@
 #include <array>
 #include <unordered_set>
 #include "nodedef.h"
+#include "node_modifier.h"
 #include "tile.h"
 
 class Client;
@@ -70,8 +71,8 @@ struct NodeVisuals
 	 * total ContentFeatures.
 	 * @param progress_cbk_args passed to the callback function
 	 */
-	static void fillNodeVisuals(NodeDefManager *ndef, Client *client,
-			void *progress_callback_args);
+	static void fillNodeVisuals(NodeDefManager *ndef, NodeModifierManager *nmod,
+			Client *client, void *progress_callback_args);
 
 	DISABLE_CLASS_COPY(NodeVisuals);
 

@@ -22,8 +22,10 @@ int ModApiNodeModifier::l_register_node_modifier_raw(lua_State *L)
 	if (f.name.empty())
 		throw LuaError("Cannot register node modifier with empty name");
 
-	NodeModifier mat(f);
-	matdef->set(name, mat);
+	NodeModifier mat(std::move(f));
+	matdef->set(name, std::move(mat));
+
+	return 0;
 }
 
 void ModApiNodeModifier::Initialize(lua_State *L, int top)

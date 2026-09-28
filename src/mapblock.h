@@ -288,7 +288,7 @@ public:
 	// Copies data from VoxelManipulator to getPosRelative()
 	void copyFrom(const VoxelManipulator &src);
 
-	void getNodeModifiersAndAddToMap(std::map<v3s16, NodeModifier*> &dst);
+	void getNodeModifiersAndAddToMap(std::map<v3s16, const NodeModifier*> &dst);
 
 	// Update is air flag.
 	// Sets m_is_air to appropriate value.

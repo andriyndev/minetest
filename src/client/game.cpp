@@ -406,6 +406,7 @@ Game::~Game()
 	delete eventmgr;
 	delete texture_src;
 	delete shader_src;
+	delete nodemod_manager;
 	delete nodedef_manager;
 	delete itemdef_manager;
 	delete draw_control;
@@ -692,6 +693,7 @@ bool Game::init(GameStartData &start_data)
 
 	itemdef_manager = createItemDefManager();
 	nodedef_manager = createNodeDefManager();
+	nodemod_manager = createNodeModifierManager();
 
 	m_item_visuals_manager = std::make_unique<ItemVisualsManager>();
 
@@ -699,7 +701,7 @@ bool Game::init(GameStartData &start_data)
 	quicktune = new QuicktuneShortcutter();
 
 	if (!(texture_src && shader_src && itemdef_manager && nodedef_manager
-			&& eventmgr && quicktune))
+			&& nodemod_manager && eventmgr && quicktune))
 		return false;
 
 	if (!initSound())
@@ -1018,7 +1020,8 @@ bool Game::connectToServer(const GameStartData &start_data,
 		client = new Client(start_data.name.c_str(),
 				start_data.password,
 				*draw_control, texture_src, shader_src,
-				itemdef_manager, nodedef_manager, sound_manager.get(), eventmgr,
+				itemdef_manager, nodedef_manager, nodemod_manager,
+				sound_manager.get(), eventmgr,
 				m_rendering_engine,
 				m_item_visuals_manager.get(),
 				start_data.allow_login_or_register);

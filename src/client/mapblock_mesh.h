@@ -54,7 +54,7 @@ struct MeshMakeData
 
 	const NodeDefManager *m_nodedef;
 
-	std::map<v3s16, NodeModifier*> m_node_modifiers;
+	std::map<v3s16, const NodeModifier*> m_node_modifiers;
 
 	MeshMakeData(const NodeDefManager *ndef, u16 side_lingth, MeshGrid mesh_grid);
 

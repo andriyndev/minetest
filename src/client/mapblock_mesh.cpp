@@ -157,11 +157,20 @@ void getNodeTileN(MapNode mn, const v3s16 &p, u8 tileindex, MeshMakeData *data, 
 {
 	const NodeDefManager *ndef = data->m_nodedef;
 	const ContentFeatures &f = ndef->get(mn);
-	const NodeModifier *node_modifier = data->m_node_modifiers[p];
+	const NodeModifier *node_modifier = nullptr;
 
-	if (node_modifier))
-	tile = f.visuals->tiles[tileindex];
+	if (p.X >= 17 || p.Y >= 17 || p.Z >= 16)
+		errorstream << p << std::endl;
+
+	auto nm_it = data->m_node_modifiers.find(data->m_blockpos * MAP_BLOCKSIZE + p);
+	if (nm_it != data->m_node_modifiers.end())
+		node_modifier = nm_it->second;
+
 	bool has_crack = p == data->m_crack_pos_relative;
+	if (node_modifier)
+		tile = node_modifier->m_content_features.visuals->tiles[tileindex];
+	else
+		tile = f.visuals->tiles[tileindex];
 	for (TileLayer &layer : tile.layers) {
 		if (layer.empty())
 			continue;
