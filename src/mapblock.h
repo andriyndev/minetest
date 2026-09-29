@@ -288,7 +288,18 @@ public:
 	// Copies data from VoxelManipulator to getPosRelative()
 	void copyFrom(const VoxelManipulator &src);
 
-	void getNodeModifiersAndAddToMap(std::map<v3s16, const NodeModifier*> &dst);
+	// Keys are node offsets from origin (a world node position).
+	void copyNodeModifiersTo(AppliedNodeModifiersList &dst, v3s16 origin) const;
+
+	// Low-level modifier changes; use Map methods to update live map lighting.
+	bool addNodeModifier(v3s16 pos, u16 id);
+	bool setNodeModifiers(v3s16 pos, const std::vector<u16> &ids);
+	bool removeNodeModifier(v3s16 pos, u16 id);
+	bool clearNodeModifiers(v3s16 pos);
+	// To do: check if needed (it was generated for the test)
+	const AppliedNodeModifiersList &getNodeModifiers() const { return m_node_modifiers; }
+
+	ContentLightingFlags getLightingFlags(v3s16 pos, const MapNode &node) const;
 
 	// Update is air flag.
 	// Sets m_is_air to appropriate value.
@@ -452,6 +463,11 @@ private:
 	static void correctBlockNodeIds(const NameIdMapping *nimap, MapNode *nodes,
 			IGameDef *gamedef);
 
+	
+	void getNodeModifierIdMapping(NameIdMapping &nimap,
+			AppliedNodeModifiersList &modifiers) const;
+	void correctNodeModifierIds(const NameIdMapping &nimap);
+
 	/*
 	 * PLEASE NOTE: When adding something here be mindful of position and size
 	 * of member variables! This is also the reason for the weird public-private
@@ -565,6 +581,7 @@ public:
 
 private:
 	NodeTimerList m_node_timers;
+	AppliedNodeModifiersList m_node_modifiers;
 };
 
 typedef std::vector<MapBlock*> MapBlockVect;

@@ -526,7 +526,7 @@ void NodeVisuals::fillNodeVisuals(NodeDefManager *ndef, NodeModifierManager *nmo
 	tsettings.readSettings();
 
 	tsrc->setImageCaching(true);
-	const u32 size = ndef->size() + nmod->size();
+	const u32 size = ndef->size();// + nmod->size();
 
 	std::unordered_set<std::string> pool;
 	auto preUpdTexFunc = [&](ContentFeatures &f) {
@@ -535,7 +535,7 @@ void NodeVisuals::fillNodeVisuals(NodeDefManager *ndef, NodeModifierManager *nmo
 	};
 	/* collect all textures we might use */
 	ndef->applyFunction(preUpdTexFunc);
-	nmod->applyFunction(preUpdTexFunc);
+	//nmod->applyFunction(preUpdTexFunc);
 
 	/* texture pre-loading stage */
 	const size_t arraymax = getArrayTextureMax(shdsrc);
@@ -609,7 +609,7 @@ void NodeVisuals::fillNodeVisuals(NodeDefManager *ndef, NodeModifierManager *nmo
 		progress++;
 	};
 	ndef->applyFunction(updTexFunc);
-	nmod->applyFunction(updTexFunc);
+	//nmod->applyFunction(updTexFunc);
 
 	SORT_AND_UNIQUE(ndef->m_leaves_materials);
 	verbosestream << "m_leaves_materials.size() = " << ndef->m_leaves_materials.size()

@@ -2895,12 +2895,12 @@ PointedThing Game::updatePointedThing(
 
 		// Get selection mesh light level
 		MapNode n = map.getNode(p);
-		u16 node_light = getInteriorLight(n, -1, nodedef);
+		u16 node_light = getInteriorLight(n, -1, map.getLightingFlags(p, n));
 		u16 light_level = node_light;
 
 		for (const v3s16 &dir : g_6dirs) {
 			n = map.getNode(p + dir);
-			node_light = getInteriorLight(n, -1, nodedef);
+			node_light = getInteriorLight(n, -1, map.getLightingFlags(p + dir, n));
 			if (node_light > light_level)
 				light_level = node_light;
 		}

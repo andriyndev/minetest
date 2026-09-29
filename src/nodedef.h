@@ -343,7 +343,6 @@ struct ContentFeatures
 	u8 leveled;
 	// Maximum value for leveled nodes
 	u8 leveled_max;
-	std::string node_modifier_meta_field;
 
 	// --- CLIENT ONLY ---
 

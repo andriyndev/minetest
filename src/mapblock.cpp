@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <sstream>
+#include "ididmapping.h"
 #include "map.h"
 #include "nodedef.h"
 #include "nodemetadata.h"
@@ -22,55 +23,6 @@
 #include "util/string.h"
 #include "util/serialize.h"
 #include "util/basic_macros.h"
-
-// Like a std::unordered_map<content_t, content_t>, but faster.
-//
-// Unassigned entries are marked with 0xFFFF.
-//
-// The static memory requires about 65535 * 2 bytes RAM in order to be
-// sure we can handle all content ids.
-class IdIdMapping
-{
-	static_assert(sizeof(content_t) == 2, "content_t must be 16-bit");
-
-private:
-	std::unique_ptr<content_t[]> m_mapping;
-	std::vector<content_t> m_dirty;
-
-public:
-	IdIdMapping()
-	{
-		m_mapping = std::make_unique<content_t[]>(CONTENT_MAX + 1);
-		memset(m_mapping.get(), 0xFF, (CONTENT_MAX + 1) * sizeof(content_t));
-	}
-
-	DISABLE_CLASS_COPY(IdIdMapping)
-
-	content_t get(content_t k) const
-	{
-		return m_mapping[k];
-	}
-
-	void set(content_t k, content_t v)
-	{
-		m_mapping[k] = v;
-		m_dirty.push_back(k);
-	}
-
-	void clear()
-	{
-		for (auto k : m_dirty)
-			m_mapping[k] = 0xFFFF;
-		m_dirty.clear();
-	}
-
-	static IdIdMapping &giveClearedThreadLocalInstance()
-	{
-		static thread_local IdIdMapping tl_ididmapping;
-		tl_ididmapping.clear();
-		return tl_ididmapping;
-	}
-};
 
 static const char *modified_reason_strings[] = {
 	"reallocate or initial",
@@ -233,28 +185,57 @@ void MapBlock::copyFrom(const VoxelManipulator &src)
 	tryShrinkNodes();
 }
 
-void MapBlock::getNodeModifiersAndAddToMap(std::map<v3s16, const NodeModifier*> &dst)
+bool MapBlock::addNodeModifier(v3s16 pos, u16 id)
 {
-	const NodeDefManager *nodedef = m_gamedef->ndef();
-	const NodeModifierManager *nodemod = m_gamedef->getNodeModifierManager();
+	if (!isValidPosition(pos) || id == MODIFIER_IGNORE)
+		return false;
 
-	for(s16 z=0; z<MAP_BLOCKSIZE; z++)
-	for(s16 y=0; y<MAP_BLOCKSIZE; y++)
-	for(s16 x=0; x<MAP_BLOCKSIZE; x++) {
-		v3s16 p(x, y, z);
-		const ContentFeatures &f = nodedef->get(getNodeNoEx(p).getContent());
-		if (f.node_modifier_meta_field != "") {
-			NodeMetadata *nm = m_node_metadata.get(p);
-			if (nm) {
-				std::string node_modifier_name = nm->getString(f.node_modifier_meta_field);
-				if (node_modifier_name != "") {
-					const NodeModifier *node_modifier = nodemod->get(node_modifier_name);
-					if (node_modifier)
-						dst[m_pos_relative + p] = node_modifier;
-				}
-			}
-		}
-	}
+	if (!m_node_modifiers.add(pos, id))
+		return false;
+
+	raiseModified(MOD_STATE_WRITE_NEEDED);
+	return true;
+}
+
+bool MapBlock::setNodeModifiers(v3s16 pos, const std::vector<u16> &ids)
+{
+	if (!isValidPosition(pos) || !m_node_modifiers.set(pos, ids))
+		return false;
+
+	raiseModified(MOD_STATE_WRITE_NEEDED);
+	return true;
+}
+
+bool MapBlock::removeNodeModifier(v3s16 pos, u16 id)
+{
+	if (!isValidPosition(pos) || !m_node_modifiers.remove(pos, id))
+		return false;
+
+	raiseModified(MOD_STATE_WRITE_NEEDED);
+	return true;
+}
+
+bool MapBlock::clearNodeModifiers(v3s16 pos)
+{
+	if (!isValidPosition(pos) || !m_node_modifiers.remove(pos))
+		return false;
+
+	raiseModified(MOD_STATE_WRITE_NEEDED);
+	return true;
+}
+
+void MapBlock::copyNodeModifiersTo(AppliedNodeModifiersList &dst, v3s16 origin) const
+{
+	dst.append(m_node_modifiers, m_pos_relative - origin);
+}
+
+ContentLightingFlags MapBlock::getLightingFlags(v3s16 pos, const MapNode &node) const
+{
+	ContentLightingFlags base = m_gamedef->ndef()->getLightingFlags(node);
+	if (m_node_modifiers.entries().empty())
+		return base;
+
+	return m_node_modifiers.resolve(pos, *m_gamedef->getNodeModifierManager()).apply(base);
 }
 
 void MapBlock::reallocate(u32 count, MapNode n)
@@ -409,6 +390,51 @@ void MapBlock::correctBlockNodeIds(const NameIdMapping *nimap, MapNode *nodes,
 	}
 }
 
+void MapBlock::getNodeModifierIdMapping(NameIdMapping &nimap,
+		AppliedNodeModifiersList &modifiers) const
+{
+	const auto *nmod = m_gamedef->getNodeModifierManager();
+	auto &mapping = IdIdMapping::giveClearedThreadLocalInstance();
+	u16 next_id = 0;
+	modifiers.remapIds([&](u16 global_id) -> u16 {
+		if (global_id >= nmod->size())
+			throw SerializationError("MapBlock::getNodeModifierIdMapping(): "
+					"Unknown global ID " + std::to_string(global_id));
+		if (auto cached = mapping.get(global_id); cached != MODIFIER_IGNORE)
+			return cached;
+
+		u16 local_id = next_id++;
+		nimap.set(local_id, nmod->get(global_id).m_name);
+		mapping.set(global_id, local_id);
+		return local_id;
+	});
+}
+
+void MapBlock::correctNodeModifierIds(const NameIdMapping &nimap)
+{
+	const auto *nmod = m_gamedef->getNodeModifierManager();
+	auto &mapping = IdIdMapping::giveClearedThreadLocalInstance();
+	m_node_modifiers.remapIds([&](u16 local_id) -> u16 {
+		if (auto cached = mapping.get(local_id); cached != MODIFIER_IGNORE)
+			return cached;
+
+		std::string name;
+		if (!nimap.getName(local_id, name))
+			throw SerializationError("MapBlock::correctNodeModifierIds(): "
+					"No name mapping for ID " + std::to_string(local_id));
+
+		u16 global_id = nmod->getId(name);
+		if (global_id == MODIFIER_IGNORE) {
+			global_id = m_gamedef->allocateUnknownNodeModifierId(name);
+			if (global_id == MODIFIER_IGNORE)
+				throw SerializationError("MapBlock::correctNodeModifierIds(): "
+						"Cannot allocate ID for modifier " + name);
+		}
+		mapping.set(local_id, global_id);
+		return global_id;
+	});
+}
+
 void MapBlock::serialize(std::ostream &os_compressed, u8 version, bool disk, int compression_level)
 {
 	if (!ser_ver_supported_write(version))
@@ -509,6 +535,17 @@ void MapBlock::serialize(std::ostream &os_compressed, u8 version, bool disk, int
 		if (version >= 25) {
 			// Node timers
 			m_node_timers.serialize(os, version);
+		}
+	}
+
+	if (version >= 30) {
+		NameIdMapping modifier_names;
+		if (disk) {
+			auto modifiers = m_node_modifiers;
+			getNodeModifierIdMapping(modifier_names, modifiers);
+			modifiers.serialize(os, version, true, modifier_names);
+		} else {
+			m_node_modifiers.serialize(os, version, false, modifier_names);
 		}
 	}
 
@@ -615,6 +652,13 @@ void MapBlock::deSerializeUncompressed(std::istream &is, u8 version, bool disk)
 			m_is_air = nimap.getId("air", dummy);
 			m_is_air_expired = false;
 		}
+	}
+
+	if (version >= 30) {
+		NameIdMapping modifier_names;
+		m_node_modifiers.deSerialize(is, version, disk, modifier_names);
+		if (disk)
+			correctNodeModifierIds(modifier_names);
 	}
 
 	TRACESTREAM(<<"MapBlock::deSerialize "<<getPos()

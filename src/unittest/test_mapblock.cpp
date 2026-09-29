@@ -5,6 +5,7 @@
 
 #include <sstream>
 #include "gamedef.h"
+#include "dummygamedef.h"
 #include "nodedef.h"
 #include "mapblock.h"
 #include "serialization.h"
@@ -27,6 +28,10 @@ public:
 	}
 
 	void testSave29(IGameDef *gamedef);
+	void testNodeModifiers();
+	void testSetNodeModifiers();
+	void testResolveNodeModifiers();
+	void testCollectNodeModifiers();
 
 	void testLoad29(IGameDef *gamedef);
 
@@ -47,6 +52,10 @@ void TestMapBlock::runTests(IGameDef *gamedef)
 	TEST(testSaveLoad, gamedef, SER_FMT_VER_HIGHEST_WRITE);
 	TEST(testSaveLoadLowest, gamedef);
 	TEST(testSave29, gamedef);
+	TEST(testNodeModifiers);
+	TEST(testSetNodeModifiers);
+	TEST(testResolveNodeModifiers);
+	TEST(testCollectNodeModifiers);
 	TEST(testLoad29, gamedef);
 	TEST(testLoad20, gamedef);
 	TEST(testLoadNonStd, gamedef);
@@ -54,6 +63,104 @@ void TestMapBlock::runTests(IGameDef *gamedef)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+
+// To do: investigate what Codex has generated here
+void TestMapBlock::testCollectNodeModifiers()
+{
+	DummyGameDef game;
+	auto *manager = game.getWritableNodeModifierManager();
+	u16 first = manager->add(NodeModifier("test:first"));
+	u16 second = manager->add(NodeModifier("test:second"));
+	u16 dummy = manager->add(NodeModifier("test:missing", true));
+	MapBlock central({2, 0, 0}, &game), neighbor({1, 0, 0}, &game);
+	const v3s16 pos(3, 4, 5);
+	central.addNodeModifier(pos, first);
+	central.addNodeModifier(pos, second);
+	central.addNodeModifier(pos, first);
+	central.addNodeModifier(pos, dummy);
+	central.addNodeModifier({0, 0, 0}, 60000); // Unknown client-side ID.
+	neighbor.addNodeModifier(pos, second);
+	AppliedNodeModifiersList collected;
+	const v3s16 origin = central.getPosRelative();
+	central.copyNodeModifiersTo(collected, origin);
+	neighbor.copyNodeModifiersTo(collected, origin);
+	UASSERTEQ(size_t, collected.entries().size(), 5);
+	auto [begin, end] = collected.findRange(pos);
+	UASSERTEQ(size_t, end - begin, 3);
+	UASSERTEQ(u16, begin[0].id, second);
+	UASSERTEQ(u16, begin[1].id, first);
+	UASSERT(manager->get(begin[2].id).m_is_dummy);
+	auto [neighbor_begin, neighbor_end] = collected.findRange(pos - v3s16(MAP_BLOCKSIZE, 0, 0));
+	UASSERTEQ(size_t, neighbor_end - neighbor_begin, 1);
+	UASSERTEQ(u16, neighbor_begin->id, second);
+	auto [unknown, unknown_end] = collected.findRange({0, 0, 0});
+	UASSERTEQ(size_t, unknown_end - unknown, 1);
+	UASSERT(manager->get(unknown->id).m_is_dummy);
+	auto [missing, missing_end] = collected.findRange({2, 0, 0});
+	UASSERT(missing == missing_end);
+	central.removeNodeModifier(pos, first);
+	UASSERTEQ(size_t, collected.findRange(pos).second - collected.findRange(pos).first, 3);
+
+}
+
+void TestMapBlock::testNodeModifiers()
+{
+	DummyGameDef source_game, target_game;
+	auto *source_manager = source_game.getWritableNodeModifierManager();
+	auto *target_manager = target_game.getWritableNodeModifierManager();
+	u16 first = source_manager->add(NodeModifier("test:first"));
+	u16 second = source_manager->add(NodeModifier("test:second"));
+	// Deliberately give the same name a different runtime ID on load.
+	target_manager->add(NodeModifier("test:other"));
+	u16 target_first = target_manager->add(NodeModifier("test:first"));
+	MapBlock source({}, &source_game);
+	source.resetModified();
+	const v3s16 pos(1, 2, 3);
+	UASSERT(source.addNodeModifier(pos, first));
+	UASSERT(source.addNodeModifier(pos, second));
+	UASSERT(source.addNodeModifier(pos, first)); // Move first after second.
+	UASSERT(!source.addNodeModifier({MAP_BLOCKSIZE, 0, 0}, first));
+	UASSERT(!source.addNodeModifier(pos, MODIFIER_IGNORE));
+	UASSERTEQ(u32, source.getModified(), MOD_STATE_WRITE_NEEDED);
+
+	for (bool disk : {false, true}) {
+		std::stringstream stream;
+		source.serialize(stream, 30, disk, -1);
+		MapBlock loaded({}, disk ? &target_game : &source_game);
+		loaded.deSerialize(stream, 30, disk);
+		std::stringstream entries;
+		loaded.getNodeModifiers().serialize(entries, 30, false, NameIdMapping{});
+		UASSERTEQ(u16, readU16(entries), 2);
+		UASSERT(readV3S16(entries) == pos);
+		u16 expected_second = disk ? target_manager->getId("test:second") : second;
+		UASSERTEQ(u16, readU16(entries), expected_second);
+		UASSERT(readV3S16(entries) == pos);
+		UASSERTEQ(u16, readU16(entries), disk ? target_first : first);
+		if (disk)
+			UASSERT(target_manager->get(expected_second).m_is_dummy);
+
+		// Older formats load into a fresh block without modifiers.
+		std::stringstream legacy;
+		source.serialize(legacy, 29, disk, -1);
+		MapBlock legacy_block({}, disk ? &target_game : &source_game);
+		legacy_block.deSerialize(legacy, 29, disk);
+		std::stringstream empty;
+		legacy_block.getNodeModifiers().serialize(empty, 30, false, NameIdMapping{});
+		UASSERTEQ(u16, readU16(empty), 0);
+	}
+
+	source.removeNodeModifier(pos, first);
+	source.resetModified();
+	source.removeNodeModifier(pos, second);
+	UASSERTEQ(u32, source.getModified(), MOD_STATE_WRITE_NEEDED);
+	std::stringstream stream;
+	source.serialize(stream, 30, true, -1);
+	MapBlock empty({}, &target_game);
+	empty.deSerialize(stream, 30, true);
+	std::stringstream entries;
+	empty.getNodeModifiers().serialize(entries, 30, false, NameIdMapping{});
+	UASSERTEQ(u16, readU16(entries), 0);
+}
 
 void TestMapBlock::testMonoblock(IGameDef *gamedef)
 {
@@ -470,4 +577,102 @@ void TestMapBlock::testLoadNonStd(IGameDef *gamedef)
 		UASSERTEQ(int, block.getNodeNoEx({i, 0, 0}).param2, data_hi[i]);
 	for (s16 i = 0; i < 16; i++)
 		UASSERTEQ(int, block.getNodeNoEx({i, 1, 0}).param2, data_lo[i]);
+}
+
+void TestMapBlock::testSetNodeModifiers()
+{
+	AppliedNodeModifiersList list;
+	const v3s16 before(0, 0, 0), pos(1, 0, 0), after(2, 0, 0);
+	UASSERT(list.add(before, 10));
+	UASSERT(list.add(after, 20));
+	auto check = [&](const std::vector<u16> &expected) {
+		UASSERT(list.entries().size() == expected.size() + 2);
+		UASSERT(list.entries().front().pos == before && list.entries().front().id == 10);
+		UASSERT(list.entries().back().pos == after && list.entries().back().id == 20);
+		auto [first, last] = list.findRange(pos);
+		std::vector<u16> actual;
+		for (auto it = first; it != last; ++it)
+			actual.push_back(it->id);
+		UASSERT(actual == expected);
+	};
+	UASSERT(list.set(pos, {1, 2, 1, 3, 2}));
+	check({1, 3, 2});
+	UASSERT(list.set(pos, {4, 5, 6}));
+	check({4, 5, 6});
+	UASSERT(list.set(pos, {7}));
+	check({7});
+	UASSERT(list.set(pos, {1, 2, 3, 4}));
+	check({1, 2, 3, 4});
+	UASSERT(!list.set(pos, {5, MODIFIER_IGNORE}));
+	check({1, 2, 3, 4});
+	std::vector<u16> full;
+	for (u32 id = 0; id < MODIFIER_IGNORE; ++id)
+		full.push_back(id);
+	UASSERT(!list.set(pos, full));
+	check({1, 2, 3, 4});
+	full.resize(MODIFIER_IGNORE - 2);
+	UASSERT(list.set(pos, full));
+	check(full);
+	UASSERT(list.set(pos, {}));
+	check({});
+}
+
+void TestMapBlock::testResolveNodeModifiers()
+{
+	NodeModifierManager manager;
+	auto add = [&](const char *name, u8 light, bool overrides, bool dummy = false) {
+		NodeModifier modifier(name, dummy);
+		modifier.m_light_source = light;
+		modifier.m_modified_props_mask = overrides ? static_cast<u64>(MP_LightSource) : 0;
+		return manager.add(std::move(modifier));
+	};
+	u16 bright = add("test:bright", 12, true);
+	u16 dim = add("test:dim", 3, true);
+	u16 off = add("test:off", 0, true);
+	u16 unrelated = add("test:unrelated", 8, false);
+	u16 dummy = add("test:dummy", 14, true, true);
+	ContentLightingFlags base{};
+	base.light_source = 7;
+	base.has_light = true;
+	base.light_propagates = true;
+	base.sunlight_propagates = false;
+
+	AppliedNodeModifiersList list;
+	const v3s16 p(0, 0, 0);
+	UASSERT(list.resolve(p, manager).mask == 0);
+	UASSERT(list.resolve(p, manager).apply(base) == base);
+	UASSERT(list.set(p, {bright, unrelated, dim, dummy}));
+	NodePropertyOverrides value = list.resolve(p, manager);
+	UASSERT(value.mask == MP_LightSource && value.light_source == 3);
+	ContentLightingFlags expected = base;
+	expected.light_source = 3;
+	UASSERT(value.apply(base) == expected);
+	UASSERT(base.light_source == 7);
+	UASSERT(list.add(p, bright)); // Reapplying changes precedence.
+	UASSERT(list.resolve(p, manager).light_source == 12);
+	UASSERT(list.add(p, off));
+	expected.light_source = 0;
+	UASSERT(list.resolve(p, manager).apply(base) == expected);
+	UASSERT(list.set(v3s16(0, 0, 2), {dummy, unrelated, 60000}));
+	UASSERT(list.resolve(v3s16(0, 0, 2), manager).mask == 0);
+	UASSERT(list.set(v3s16(0, 1, -2), {bright}));
+	UASSERT(list.set(v3s16(1, -2, -2), {dim}));
+
+	// Gaps, negative coordinates, order transitions, and repeated positions.
+	auto cursor = list.cursor(manager, false);
+	for (v3s16 pos : {v3s16(-1, 0, 0), p, p, v3s16(0, 0, 1),
+			v3s16(0, 0, 2), v3s16(0, 1, -2), v3s16(1, -2, -2),
+			v3s16(2, 0, 0), v3s16(2, 0, 0)}) {
+		NodePropertyOverrides actual = cursor.resolve(pos);
+		NodePropertyOverrides random = list.resolve(pos, manager);
+		UASSERT(actual.mask == random.mask && actual.apply(base) == random.apply(base));
+	}
+	auto skipping = list.cursor(manager, true);
+	UASSERT(skipping.resolve(v3s16(1, -2, -2)).light_source == 3);
+	UASSERT(skipping.resolve(v3s16(1, -2, -2)).light_source == 3);
+	UASSERT(skipping.resolve(v3s16(2, 0, 0)).mask == 0);
+	AppliedNodeModifiersList empty;
+	auto empty_cursor = empty.cursor(manager, false);
+	UASSERT(empty_cursor.resolve(p).apply(base) == base);
+	UASSERT(empty_cursor.resolve(p).mask == 0);
 }

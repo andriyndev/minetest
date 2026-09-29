@@ -374,11 +374,12 @@ public:
 	bool isClient() override { return true; }
 	IItemDefManager* getItemDefManager() override;
 	const NodeDefManager* getNodeDefManager() override;
-	const NodeModifierManager *getNodeModifierManager() override;
+	const NodeModifierManager *getNodeModifierManager() override { return m_nodemod; }
 	ICraftDefManager* getCraftDefManager() override;
 	ITextureSource* getTextureSource();
 	virtual IWritableShaderSource* getShaderSource();
 	u16 allocateUnknownNodeId(const std::string &name) override;
+	u16 allocateUnknownNodeModifierId(const std::string &name) override;
 	virtual ISoundManager* getSoundManager();
 	MtEventManager* getEventManager();
 	virtual ParticleManager* getParticleManager();

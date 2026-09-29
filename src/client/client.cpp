@@ -2035,10 +2035,6 @@ const NodeDefManager* Client::getNodeDefManager()
 {
 	return m_nodedef;
 }
-const NodeModifierManager* Client::getNodeModifierManager()
-{
-	return m_nodemod;
-}
 ICraftDefManager* Client::getCraftDefManager()
 {
 	return NULL;
@@ -2061,6 +2057,12 @@ u16 Client::allocateUnknownNodeId(const std::string &name)
 
 	return CONTENT_IGNORE;
 }
+u16 Client::allocateUnknownNodeModifierId(const std::string &name)
+{
+	FATAL_ERROR("Client cannot allocate node modifier IDs");
+	return MODIFIER_IGNORE;
+}
+
 ISoundManager* Client::getSoundManager()
 {
 	return m_sound;

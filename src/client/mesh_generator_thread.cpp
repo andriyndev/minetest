@@ -225,7 +225,8 @@ void MeshUpdateQueue::fillDataFromMapBlocks(QueuedMeshUpdate *q)
 {
 	auto mesh_grid = m_client->getMeshGrid();
 	MeshMakeData *data = new MeshMakeData(m_client->ndef(),
-			MAP_BLOCKSIZE * mesh_grid.cell_size, mesh_grid);
+			MAP_BLOCKSIZE * mesh_grid.cell_size, mesh_grid,
+			m_client->getNodeModifierManager());
 	q->data = data;
 
 	data->fillBlockDataBegin(q->p);
@@ -234,7 +235,9 @@ void MeshUpdateQueue::fillDataFromMapBlocks(QueuedMeshUpdate *q)
 	for (auto *block : q->map_blocks) {
 		if (block) {
 			block->copyTo(data->m_vmanip);
-			block->getNodeModifiersAndAddToMap(data->m_node_modifiers);
+			// To do: maybe store modifiers in the format relative to blocks
+			block->copyNodeModifiersTo(data->m_node_modifiers,
+					data->m_blockpos * MAP_BLOCKSIZE);
 		}
 	}
 

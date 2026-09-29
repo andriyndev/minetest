@@ -42,6 +42,11 @@ public:
 	const NodeDefManager *getNodeDefManager() override { return m_nodedef; }
 	NodeDefManager* getWritableNodeDefManager() { return m_nodedef; }
 	const NodeModifierManager *getNodeModifierManager() override { return m_nodemod; }
+	NodeModifierManager *getWritableNodeModifierManager() { return m_nodemod; }
+	u16 allocateUnknownNodeModifierId(const std::string &name) override
+	{
+		return m_nodemod->add(NodeModifier(name, true));
+	}
 	ICraftDefManager *getCraftDefManager() override { return m_craftdef; }
 
 	u16 allocateUnknownNodeId(const std::string &name) override

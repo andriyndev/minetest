@@ -7501,6 +7501,10 @@ Item handling
       item `toolname` (not limited to tools). The default implementation doesn't
       use `tool`, `digger`, and `pos`, but these are provided by `core.node_dig`
       since 5.12.0 for games/mods implementing customized drops.
+    * For table drops, a second return value maps drop indices to booleans
+      indicating `inherit_node_modifiers`. Digging and detached-node drops use
+      this to preserve modifiers on the selected entries. Overrides may return
+      this table too; an omitted table does not opt explicit drops in.
     * `node`: node as table or node name
     * `toolname`: name of the item used to dig (can be `nil`)
     * `tool`: `ItemStack` used to dig (can be `nil`)
@@ -8773,6 +8777,18 @@ Can be obtained via `item:get_meta()`.
 ### Methods
 
 * All methods in MetaDataRef
+* `add_modifier(name)`: applies a registered node modifier by name; returns `true`
+  on success, or `false` for an unknown modifier or if it cannot be applied.
+  Reapplying a modifier moves it to the end of the application order.
+* `set_modifiers(list)`: replaces modifiers with the given array of names without
+  changing ordinary fields or inventory. An empty array clears modifiers.
+  Unknown names are preserved; duplicate names keep their last occurrence.
+  Returns `true` on success, or `false` for invalid names, a non-table argument,
+  an unavailable node, or insufficient modifier capacity. Failure leaves the
+  existing modifier list unchanged.
+* `remove_modifier(name)`: removes the modifier.
+* `get_modifiers_list()`: returns a new array of modifier names in application order.
+  Modifiers are stored separately from ordinary metadata fields.
 * `set_tool_capabilities([tool_capabilities])`
     * Overrides the item's tool capabilities
     * A nil value will clear the override data and restore the original
@@ -8845,6 +8861,30 @@ A metadata table is a table that has the following keys:
     * inventory table values are item tables
     * item table keys are slot IDs (starting with 1)
     * item table values are ItemStacks
+* `modifiers` (for NodeMetaRef and ItemStackMetaRef only): An array of modifier
+  names in application order
+    * `to_table()` includes this list even when empty
+    * `from_table()` replaces modifiers with this list; an omitted or empty list
+      clears them. `from_table(nil)` also clears modifiers.
+    * Unknown names are preserved for round-trips, but have no effect until registered
+    * Digging, detached-node drops, and falling nodes that break into items
+      preserve modifiers when `drop` is omitted.
+      Explicit string drops do not inherit modifiers. Drop table entries opt in
+      with `inherit_node_modifiers = true`. `preserve_node_modifiers` overrides
+      this behavior and runs before `preserve_metadata`. Custom digging/drop
+      implementations must handle transfer themselves.
+    * `core.item_place_node` applies ItemStack modifiers after `on_construct` and
+      before placement callbacks, preserving other node metadata and private fields.
+      Unknown modifier names are retained.
+    * Replacing or removing a node clears its modifiers; `core.swap_node` preserves them.
+    * Falling nodes retain modifiers through saving and landing. Leveled falling
+      nodes merge only when both modifier lists match, including order; otherwise
+      they produce drops using the rules above.
+    * Repeated names move to the end, as with `add_modifier`
+    * Names must have the format `modname:name` and be at most 65535 bytes.
+      Both parts must be nonempty; `modname` allows `[a-z0-9_]` and `name`
+      allows `[a-zA-Z0-9_]`.
+    * `from_table()` returns `false` for invalid modifier names or a non-table list
 
 Example:
 
@@ -8902,6 +8942,18 @@ Can be obtained via `core.get_meta(pos)`.
 ### Methods
 
 * All methods in MetaDataRef
+* `add_modifier(name)`: applies a registered node modifier by name; returns `true`
+  on success, or `false` for an unknown modifier or if it cannot be applied.
+  Reapplying a modifier moves it to the end of the application order.
+* `set_modifiers(list)`: replaces modifiers with the given array of names without
+  changing ordinary fields or inventory. An empty array clears modifiers.
+  Unknown names are preserved; duplicate names keep their last occurrence.
+  Returns `true` on success, or `false` for invalid names, a non-table argument,
+  an unavailable node, or insufficient modifier capacity. Failure leaves the
+  existing modifier list unchanged.
+* `remove_modifier(name)`: removes the modifier.
+* `get_modifiers_list()`: returns a new array of modifier names in application order.
+  Modifiers are stored separately from ordinary metadata fields.
 * `get_inventory()`: returns `InvRef`
 * `mark_as_private(name or {name1, name2, ...})`: Mark specific vars as private
   This will prevent them from being sent to the client. Note that the "private"
@@ -11082,6 +11134,10 @@ Used by `core.register_node`.
                 -- hardware coloring palette color from the dug node.
                 -- Default is 'false'.
                 inherit_color = true,
+                -- Whether all items in this entry inherit node modifiers.
+                -- Default is false, even if an item has the node's name.
+                -- Overridden by the preserve_node_modifiers callback.
+                inherit_node_modifiers = true,
             },
             {
                 -- Only drop if using an item whose name contains
@@ -11132,6 +11188,28 @@ Used by `core.register_node`.
     -- over and over again every liquid update interval.
     -- Default: nil
     -- Warning: making a liquid node 'floodable' will cause problems.
+
+    preserve_node_modifiers = function(pos, oldnode, modifiers, drops),
+    -- Called when digging a node, dropping a detached attached node, or when
+    -- a falling node breaks into items. Runs before delivery of drops and,
+    -- for digging/detachment, before preserve_metadata and node removal.
+    -- For falling nodes, modifiers come from the entity's saved metadata and
+    -- pos is its current position; there may be no matching node in the map.
+    -- * `pos`: copy of the node position
+    -- * `oldnode`: copy of the original node table
+    -- * `modifiers`: array of modifier names in application order, including
+    --   unknown names; may be empty
+    -- * `drops`: table of ItemStacks. Modify their metadata to choose which
+    --   modifiers each drop receives. The return value is ignored.
+    -- Defining this callback replaces automatic modifier preservation; it is
+    -- called before any modifiers are copied from the node to the drops.
+    -- An empty function disables preservation.
+    -- Without this callback, modifiers are preserved when `drop` is omitted.
+    -- Explicit string drops do not inherit modifiers. For table drops, each
+    -- entry must opt in with `inherit_node_modifiers = true`.
+    -- Use ItemStackMetaRef:set_modifiers(modifiers) to set a drop's modifiers,
+    -- including unknown names.
+    -- default: nil
 
     preserve_metadata = function(pos, oldnode, oldmeta, drops),
     -- Called when `oldnode` is about be converted to an item, but before the
