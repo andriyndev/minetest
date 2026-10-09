@@ -8939,6 +8939,9 @@ An interface to use mod channels on client and server
 Node metadata: reference extra data and functionality stored in a node.
 Can be obtained via `core.get_meta(pos)`.
 
+A node can have at most 16 distinct modifiers. This limit is checked after
+duplicate names are removed.
+
 ### Methods
 
 * All methods in MetaDataRef
