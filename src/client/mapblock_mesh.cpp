@@ -44,9 +44,10 @@ void MeshMakeData::fillBlockDataBegin(const v3s16 &blockpos)
 	v3s16 blockpos_nodes = m_blockpos*MAP_BLOCKSIZE;
 
 	m_vmanip.clear();
-	// extra 1 block thick layer around the mesh
-	VoxelArea voxel_area(blockpos_nodes - v3s16(1,1,1) * MAP_BLOCKSIZE,
-			blockpos_nodes + v3s16(1,1,1) * (m_side_length + MAP_BLOCKSIZE) - v3s16(1,1,1));
+	// All drawtypes read one neighboring node in each direction. Rooted
+	// plants additionally sample lighting two nodes above their base.
+	VoxelArea voxel_area(blockpos_nodes - v3s16(1),
+			blockpos_nodes + v3s16(m_side_length, m_side_length + 1, m_side_length));
 	m_vmanip.addArea(voxel_area);
 }
 

@@ -10,6 +10,7 @@
 #include "log.h"
 #include "voxel.h"
 #include "dummymap.h"
+#include "mapblock.h"
 #include "irrlicht_changes/printing.h"
 
 class TestVoxelManipulator : public TestBase {
@@ -19,6 +20,7 @@ public:
 
 	void runTests(IGameDef *gamedef);
 
+	void testClippedCopy(IGameDef *gamedef);
 	void testBasic(const NodeDefManager *nodedef);
 	void testEmerge(IGameDef *gamedef);
 	void testBlitBack(IGameDef *gamedef);
@@ -29,6 +31,7 @@ static TestVoxelManipulator g_test_instance;
 
 void TestVoxelManipulator::runTests(IGameDef *gamedef)
 {
+	TEST(testClippedCopy, gamedef);
 	TEST(testBasic, gamedef->ndef());
 	TEST(testEmerge, gamedef);
 	TEST(testBlitBack, gamedef);
@@ -178,4 +181,36 @@ void TestVoxelManipulator::testBlitBack2(IGameDef *gamedef)
 	UASSERTEQ(auto, map.getNode({0,1,0}).getContent(), t_CONTENT_TORCH);
 	// The upper one should not!
 	UASSERTEQ(auto, map.getNode({0,bs,0}).getContent(), CONTENT_AIR);
+}
+
+void TestVoxelManipulator::testClippedCopy(IGameDef *gamedef)
+{
+	MapBlock block(v3s16(-2, 1, -1), gamedef);
+	const v3s16 origin = block.getPosRelative();
+	for (s16 z = 0; z < MAP_BLOCKSIZE; ++z)
+	for (s16 y = 0; y < MAP_BLOCKSIZE; ++y)
+	for (s16 x = 0; x < MAP_BLOCKSIZE; ++x)
+		block.setNode({x, y, z}, MapNode(t_CONTENT_STONE, y, x + z * 16));
+
+	// Exercise all faces, edges and corners, including partial source Y
+	// ranges across multiple Z slices and a destination outside the block.
+	for (s16 z = -1; z <= 1; ++z)
+	for (s16 y = -1; y <= 1; ++y)
+	for (s16 x = -1; x <= 1; ++x) {
+		const v3s16 offset(x * 12, y * 12, z * 12);
+		VoxelManipulator vm;
+		vm.addArea({origin + offset, origin + offset + v3s16(5, 6, 7)});
+		block.copyToClipped(vm);
+		for (s16 dz = 0; dz <= 7; ++dz)
+		for (s16 dy = 0; dy <= 6; ++dy)
+		for (s16 dx = 0; dx <= 5; ++dx) {
+			const v3s16 local = offset + v3s16(dx, dy, dz);
+			const MapNode actual = vm.getNodeNoExNoEmerge(origin + local);
+			if (block.isValidPosition(local)) {
+				UASSERT(actual == block.getNodeNoCheck(local));
+			} else {
+				UASSERTEQ(content_t, actual.getContent(), CONTENT_IGNORE);
+			}
+		}
+	}
 }

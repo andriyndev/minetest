@@ -80,6 +80,23 @@ public:
 		return registerNode(itemdef, std::move(f));
 	}
 
+	content_t addRootedPlant(std::string name, u32 texture_base, u32 texture_plant)
+	{
+		ItemDefinition itemdef;
+		itemdef.type = ITEM_NODE;
+		itemdef.name = "test:" + name;
+		itemdef.description = name;
+
+		ContentFeatures f;
+		f.visuals = std::make_unique<NodeVisuals>();
+		f.name = itemdef.name;
+		f.drawtype = NDT_PLANTLIKE_ROOTED;
+		f.visuals->tiles[0].layers[0].texture_id = texture_base;
+		f.visuals->special_tiles[0].layers[0].texture_id = texture_plant;
+
+		return registerNode(itemdef, std::move(f));
+	}
+
 	content_t addLiquidSource(std::string name, u32 texture)
 	{
 		ItemDefinition itemdef;
@@ -150,6 +167,7 @@ public:
 	const char *getName() override { return "TestMapblockMeshGenerator"; }
 
 	void runTests(IGameDef *gamedef) override;
+	void testCompactInput();
 	void testSimpleNode();
 	void testSurroundedNode();
 	void testInterliquidSame();
@@ -161,6 +179,7 @@ static TestMapblockMeshGenerator g_test_instance;
 void TestMapblockMeshGenerator::runTests(IGameDef *gamedef)
 {
 	set_light_decode_table();
+	TEST(testCompactInput);
 	TEST(testSimpleNode);
 	TEST(testSurroundedNode);
 	TEST(testInterliquidSame);
@@ -175,6 +194,54 @@ namespace quad {
 	const Quad zn{{{{-h, -h, -h}, {0, 0, -1}, 0, {0, 1}}, {{-h, h, -h}, {0, 0, -1}, 0, {0, 0}}, {{h, h, -h}, {0, 0, -1}, 0, {1, 0}}, {{h, -h, -h}, {0, 0, -1}, 0, {1, 1}}}};
 	const Quad yn{{{{-h, -h, -h}, {0, -1, 0}, 0, {0, 0}}, {{h, -h, -h}, {0, -1, 0}, 0, {1, 0}}, {{h, -h, h}, {0, -1, 0}, 0, {1, 1}}, {{-h, -h, h}, {0, -1, 0}, 0, {0, 1}}}};
 	const Quad xn{{{{-h, -h, -h}, {-1, 0, 0}, 0, {1, 1}}, {{-h, -h, h}, {-1, 0, 0}, 0, {0, 1}}, {{-h, h, h}, {-1, 0, 0}, 0, {0, 0}}, {{-h, h, -h}, {-1, 0, 0}, 0, {1, 0}}}};
+}
+
+void TestMapblockMeshGenerator::testCompactInput()
+{
+	MockGameDef gamedef;
+	const content_t stone = gamedef.addSimpleNode("stone", 42);
+	const content_t water = gamedef.addLiquidSource("water", 43);
+	const content_t plant = gamedef.addRootedPlant("rooted", 44, 45);
+	gamedef.finalize();
+
+	for (bool smooth : {false, true}) {
+		MeshMakeData compact(gamedef.ndef(), MAP_BLOCKSIZE, MeshGrid{1});
+		compact.fillBlockDataBegin({-1, 0, -1});
+		compact.m_smooth_lighting = smooth;
+		MeshMakeData full(gamedef.ndef(), MAP_BLOCKSIZE, MeshGrid{1});
+		full.m_blockpos = compact.m_blockpos;
+		full.m_smooth_lighting = smooth;
+		const v3s16 origin = full.m_blockpos * MAP_BLOCKSIZE;
+		full.m_vmanip.addArea({origin - v3s16(MAP_BLOCKSIZE),
+				origin + v3s16(2 * MAP_BLOCKSIZE - 1)});
+		UASSERTEQ(s32, compact.m_vmanip.m_area.getVolume(), 18 * 19 * 18);
+
+		for (s16 z = -MAP_BLOCKSIZE; z < 2 * MAP_BLOCKSIZE; ++z)
+		for (s16 y = -MAP_BLOCKSIZE; y < 2 * MAP_BLOCKSIZE; ++y)
+		for (s16 x = -MAP_BLOCKSIZE; x < 2 * MAP_BLOCKSIZE; ++x) {
+			const v3s16 p = origin + v3s16(x, y, z);
+			MapNode node(CONTENT_AIR, (x + y + z) & 0xff);
+			// Geometry on chunk boundaries, including rooted plants at the top.
+			if ((x == 0 || x == 15) && (z == 0 || z == 15))
+				node = MapNode(y == 15 ? plant : (y & 1) ? water : stone);
+			full.m_vmanip.setNodeNoEmerge(p, node);
+			if (compact.m_vmanip.m_area.contains(p))
+				compact.m_vmanip.setNodeNoEmerge(p, node);
+		}
+
+		MeshCollector expected{{}}, actual{{}};
+		MapblockMeshGenerator(&full, &expected).generate();
+		MapblockMeshGenerator(&compact, &actual).generate();
+		for (int layer = 0; layer < MAX_TILE_LAYERS; ++layer) {
+			UASSERTEQ(size_t, actual.prebuffers[layer].size(), expected.prebuffers[layer].size());
+			for (size_t i = 0; i < actual.prebuffers[layer].size(); ++i) {
+				const auto &a = actual.prebuffers[layer][i];
+				const auto &b = expected.prebuffers[layer][i];
+				UASSERT(a.vertices == b.vertices);
+				UASSERT(a.indices == b.indices);
+			}
+		}
+	}
 }
 
 void TestMapblockMeshGenerator::testSimpleNode()
