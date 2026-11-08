@@ -5,6 +5,9 @@
 #pragma once
 
 #include <ctime>
+#include <deque>
+#include <cassert>
+#include <thread>
 #include <mutex>
 #include <unordered_set>
 #include "irrlichttypes_bloated.h"
@@ -25,7 +28,7 @@ struct QueuedMeshUpdate
 	v3s16 p = v3s16(-1337, -1337, -1337);
 	int crack_level = -1;
 	v3s16 crack_pos;
-	MeshMakeData *data = nullptr; // This is generated in MeshUpdateQueue::pop()
+	MeshMakeData *data = nullptr;
 	std::vector<MapBlock*> map_blocks;
 	u16 epoch = U16_MAX;
 	bool urgent = false;
@@ -55,7 +58,7 @@ struct QueuedMeshUpdate
 };
 
 /*
-	A thread-safe queue of mesh update tasks and a cache of MapBlock data
+	Main-thread pending requests and a synchronized queue of prepared mesh jobs
 */
 class MeshUpdateQueue
 {
@@ -65,7 +68,7 @@ public:
 	~MeshUpdateQueue();
 
 	/**
-	 * Caches the block at p and its neighbors (if needed) and queues a mesh
+	 * Main thread only. Caches the block and its neighbors and queues a mesh
 	 * update for the block p.
 	 * @param map Map
 	 * @param p block position
@@ -75,35 +78,45 @@ public:
 	bool addBlock(Map *map, v3s16 p, bool urgent, bool from_neighbor);
 
 	/**
-	 * Re-queues a block that was already finished.
+	 * Main thread only. Re-queues a block that was already finished.
 	 */
 	void reAddBlock(MeshUpdateResult &r);
 
-	// Update internal epoch counter
-	void setEpoch(u16 epoch) {
-		MutexAutoLock lock(m_mutex);
-		m_epoch = epoch;
-	}
+	// Main thread only: update epoch and return obsolete ready jobs to pending.
+	void advanceEpoch(u16 epoch);
+
+	// Main thread only: prepare a bounded backlog of owned mesh inputs.
+	void prepare(size_t max_ready);
 
 	// Returned pointer must be deleted
-	// Returns NULL if queue is empty
+	// Thread-safe. Returns NULL if the ready queue is empty.
 	QueuedMeshUpdate *pop();
 
-	// Marks a position as finished, unblocking the next update
+	// Thread-safe. Marks a position as finished, unblocking the next update
 	void done(v3s16 pos);
 
+	// Main thread only: includes pending and ready jobs.
 	size_t size()
 	{
+		assert(std::this_thread::get_id() == m_main_thread);
+
 		MutexAutoLock lock(m_mutex);
-		return m_queue.size();
+		return m_pending.size() + m_queue.size() + m_queue_urgent.size();
 	}
 
+	/// Main thread only.
 	void clear();
 
 private:
+	// Constructed by Client on the main thread; immutable after publication.
+	const std::thread::id m_main_thread = std::this_thread::get_id();
 	Client *m_client;
-	std::vector<QueuedMeshUpdate *> m_queue;
-	std::unordered_set<v3s16> m_urgents;
+	// Main thread only. Entries have no snapshot and can be coalesced.
+	std::vector<QueuedMeshUpdate *> m_pending;
+	// Protected by m_mutex. Entries own complete snapshots.
+	std::deque<QueuedMeshUpdate *> m_queue;
+	std::deque<QueuedMeshUpdate *> m_queue_urgent;
+	// Positions reserved by ready or running jobs.
 	std::unordered_set<v3s16> m_inflight_blocks;
 	u16 m_epoch = 0;
 	std::mutex m_mutex;
@@ -113,6 +126,8 @@ private:
 	bool m_cache_enable_water_reflections;
 	bool m_cache_enable_waving_water;
 
+	// Main thread: publish a snapshot if eligible; false leaves the job pending.
+	bool prepareJob(QueuedMeshUpdate *q, size_t max_ready);
 	void fillDataFromMapBlocks(QueuedMeshUpdate *q);
 };
 
@@ -163,6 +178,9 @@ public:
 	void updateBlock(Map *map, v3s16 p, bool urgent,
 			bool update_neighbors = false);
 
+	// Main thread only, once per client step after applying map updates.
+	void prepare();
+
 	void putResult(MeshUpdateResult &&r);
 
 	/// @note caller needs to refDrop() the affected map_blocks
@@ -185,6 +203,7 @@ public:
 	bool isRunning();
 
 private:
+	const std::thread::id m_main_thread = std::this_thread::get_id();
 	typedef MutexedQueue<MeshUpdateResult> ResultQueue;
 
 	void deferUpdate();

@@ -674,6 +674,9 @@ void Client::step(float dtime)
 		}
 	}
 
+	/* Prepare meshes for updated mapblocks */
+	m_mesh_update_manager->prepare();
+
 	/*
 		Load fetched media
 	*/

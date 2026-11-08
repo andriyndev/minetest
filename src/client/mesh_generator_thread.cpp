@@ -102,6 +102,8 @@ MeshUpdateQueue::~MeshUpdateQueue()
 
 bool MeshUpdateQueue::addBlock(Map *map, v3s16 p, bool urgent, bool from_neighbor)
 {
+	assert(std::this_thread::get_id() == m_main_thread);
+
 	// If block that causes update does not exist, skip.
 	if (!map->getBlockNoCreateNoEx(p))
 		return false;
@@ -112,19 +114,11 @@ bool MeshUpdateQueue::addBlock(Map *map, v3s16 p, bool urgent, bool from_neighbo
 	// (where all coordinate are divisible by the chunk size)
 	const v3s16 mesh_position = mesh_grid.getMeshPos(p);
 
-	MutexAutoLock lock(m_mutex);
-
-	/*
-		Mark the block as urgent if requested
-	*/
-	if (urgent)
-		m_urgents.insert(mesh_position);
-
 	/*
 		Find if block is already in queue.
 		If it is, update the data and quit.
 	*/
-	for (QueuedMeshUpdate *q : m_queue) {
+	for (QueuedMeshUpdate *q : m_pending) {
 		if (q->p == mesh_position) {
 			q->crack_level = m_client->getCrackLevel();
 			q->crack_pos = m_client->getCrackPos();
@@ -150,30 +144,25 @@ bool MeshUpdateQueue::addBlock(Map *map, v3s16 p, bool urgent, bool from_neighbo
 		Note: this can be extended with more precise checks in the future
 	*/
 	if (from_neighbor && q->checkSkip(mesh_grid.cell_size)) {
-		m_urgents.erase(mesh_position);
 		g_profiler->add("MeshUpdateQueue: updates skipped", 1);
 		return true;
 	}
 
 	// Put into queue, pointer moved from `q`.
-	m_queue.push_back(q.release());
+	m_pending.push_back(q.release());
 
 	return true;
 }
 
 void MeshUpdateQueue::reAddBlock(MeshUpdateResult &r)
 {
-	const MeshGrid mesh_grid = m_client->getMeshGrid();
+	assert(std::this_thread::get_id() == m_main_thread);
 
+	const MeshGrid mesh_grid = m_client->getMeshGrid();
 	const v3s16 mesh_position = mesh_grid.getMeshPos(r.p);
 
-	MutexAutoLock lock(m_mutex);
-
-	if (r.urgent)
-		m_urgents.insert(mesh_position);
-
 	// Update if exists in queue
-	for (QueuedMeshUpdate *q : m_queue) {
+	for (QueuedMeshUpdate *q : m_pending) {
 		if (q->p == mesh_position) {
 			q->urgent |= r.urgent;
 			// Do not retrieve blocks again, but make sure to drop our old ones
@@ -190,42 +179,121 @@ void MeshUpdateQueue::reAddBlock(MeshUpdateResult &r)
 	q->urgent = r.urgent;
 	q->map_blocks = std::move(r.map_blocks);
 
-	m_queue.push_back(q.release());
+	m_pending.push_back(q.release());
+}
+
+void MeshUpdateQueue::advanceEpoch(u16 epoch)
+{
+	assert(std::this_thread::get_id() == m_main_thread);
+
+	m_epoch = epoch;
+	std::deque<QueuedMeshUpdate *> outdated, outdated_urgent;
+	{
+		MutexAutoLock lock(m_mutex);
+		outdated_urgent.swap(m_queue_urgent);
+		outdated.swap(m_queue);
+		for (QueuedMeshUpdate *q : outdated_urgent)
+			m_inflight_blocks.erase(q->p);
+		for (QueuedMeshUpdate *q : outdated)
+			m_inflight_blocks.erase(q->p);
+	}
+	outdated.insert(outdated.begin(), outdated_urgent.begin(), outdated_urgent.end());
+	// Ready jobs have not been claimed. Return them to the main-thread
+	// queue, merging acknowledgements into any newer pending request.
+	for (auto *q : outdated) {
+		delete q->data;
+		q->data = nullptr;
+		auto it = std::find_if(m_pending.begin(), m_pending.end(),
+				[q](const auto *pending) { return pending->p == q->p; });
+		if (it != m_pending.end()) {
+			(*it)->urgent |= q->urgent;
+			q->dropBlocks();
+			delete q;
+		} else {
+			m_pending.push_back(q);
+		}
+	}
+}
+
+bool MeshUpdateQueue::prepareJob(QueuedMeshUpdate *q, size_t max_ready)
+{
+	assert(std::this_thread::get_id() == m_main_thread);
+
+	UnqueuedMeshUpdate replaced;
+	{
+		MutexAutoLock lock(m_mutex);
+		if (m_inflight_blocks.count(q->p)) {
+			for (auto *queue : {&m_queue_urgent, &m_queue}) {
+				auto ready = std::find_if(queue->begin(), queue->end(),
+						[q](const auto *job) { return job->p == q->p; });
+				if (ready == queue->end())
+					continue;
+				// Promotion needs space in the urgent queue. Same-priority
+				// replacement does not increase either queue's size.
+				if (q->urgent && !(*ready)->urgent && m_queue_urgent.size() >= max_ready)
+					return false;
+				replaced.reset(*ready);
+				queue->erase(ready);
+				break;
+			}
+			if (!replaced)
+				return false; // Already running; keep the newer request pending.
+			// Keep the reservation while rebuilding the snapshot.
+		} else if ((q->urgent ? m_queue_urgent : m_queue).size() >= max_ready) {
+			return false;
+		}
+	}
+	if (replaced) {
+		q->urgent |= replaced->urgent;
+		// Keep the newer blocks and crack state. Release the old snapshot
+		// and block references on the main thread, outside the worker mutex.
+		replaced.reset();
+	}
+
+	fillDataFromMapBlocks(q);
+	q->epoch = m_epoch;
+	{
+		MutexAutoLock lock(m_mutex);
+		m_inflight_blocks.insert(q->p);
+		(q->urgent ? m_queue_urgent : m_queue).push_back(q);
+	}
+	return true;
+}
+
+void MeshUpdateQueue::prepare(size_t max_ready)
+{
+	assert(std::this_thread::get_id() == m_main_thread);
+
+	ScopeProfiler sp(g_profiler, "Client: Mesh input preparation (sum)");
+	const u64 deadline = porting::getTimeUs() + 2000;
+
+	for (bool urgent : {true, false}) {
+		for (auto it = m_pending.begin(); it != m_pending.end();) {
+			if ((*it)->urgent != urgent || !prepareJob(*it, max_ready)) {
+				++it;
+				continue;
+			}
+			// prepareJob published the job; do not dereference it again.
+			it = m_pending.erase(it);
+			if (porting::getTimeUs() >= deadline)
+				return;
+		}
+	}
 }
 
 // Returned pointer must be deleted
-// Returns NULL if queue is empty
+// Returns NULL if no prepared, eligible job is available
 QueuedMeshUpdate *MeshUpdateQueue::pop()
 {
-	QueuedMeshUpdate *result = nullptr;
-	{
-		MutexAutoLock lock(m_mutex);
+	MutexAutoLock lock(m_mutex);
+	auto &queue = m_queue_urgent.empty() ? m_queue : m_queue_urgent;
+	if (queue.empty())
+		return nullptr;
 
-		bool must_be_urgent = !m_urgents.empty();
-		for (auto i = m_queue.begin(); i != m_queue.end(); ++i) {
-			QueuedMeshUpdate *q = *i;
-			if (must_be_urgent && m_urgents.count(q->p) == 0)
-				continue;
-			// Make sure no two threads are processing the same mapblock, as that causes race conditions
-			if (m_inflight_blocks.find(q->p) != m_inflight_blocks.end())
-				continue;
-			m_queue.erase(i);
-			m_urgents.erase(q->p);
-			m_inflight_blocks.insert(q->p);
-			result = q;
-			break;
-		}
-
-		// When it leaves the queue, it becomes too late to update it, so the
-		// epoch counts at this point.
-		if (result)
-			result->epoch = m_epoch;
-	}
-
-	if (result)
-		fillDataFromMapBlocks(result);
-
-	return result;
+	auto *q = queue.front();
+	assert(q->data);
+	queue.pop_front();
+	return q;
 }
 
 void MeshUpdateQueue::done(v3s16 pos)
@@ -236,18 +304,26 @@ void MeshUpdateQueue::done(v3s16 pos)
 
 void MeshUpdateQueue::clear()
 {
+	assert(std::this_thread::get_id() == m_main_thread);
+
+	const auto clear_queue = [](auto &queue, auto on_remove) {
+		for (QueuedMeshUpdate *it : queue) {
+			on_remove(it);
+			it->dropBlocks();
+			delete it;
+		}
+		queue.clear();
+	};
+	clear_queue(m_pending, [](QueuedMeshUpdate *) {});
 	MutexAutoLock lock(m_mutex);
-	for (auto *it : m_queue) {
-		m_urgents.erase(it->p);
-		m_inflight_blocks.erase(it->p);
-		it->dropBlocks();
-		delete it;
-	}
-	m_queue.clear();
+	clear_queue(m_queue_urgent, [this](QueuedMeshUpdate *q) { m_inflight_blocks.erase(q->p); });
+	clear_queue(m_queue, [this](QueuedMeshUpdate *q) { m_inflight_blocks.erase(q->p); });
 }
 
 void MeshUpdateQueue::fillDataFromMapBlocks(QueuedMeshUpdate *q)
 {
+	assert(std::this_thread::get_id() == m_main_thread);
+
 	auto mesh_grid = m_client->getMeshGrid();
 	MeshMakeData *data = new MeshMakeData(m_client->ndef(),
 			MAP_BLOCKSIZE * mesh_grid.cell_size, mesh_grid);
@@ -255,7 +331,6 @@ void MeshUpdateQueue::fillDataFromMapBlocks(QueuedMeshUpdate *q)
 
 	data->fillBlockDataBegin(q->p);
 
-	// NOTE: the "data race" mentioned by MapBlock::tryShrinkNodes() is right here
 	for (auto *block : q->map_blocks) {
 		if (block)
 			block->copyToClipped(data->m_vmanip);
@@ -350,6 +425,8 @@ MeshUpdateManager::MeshUpdateManager(Client *client):
 
 void MeshUpdateManager::updateBlock(Map *map, v3s16 p, bool urgent, bool update_neighbors)
 {
+	assert(std::this_thread::get_id() == m_main_thread);
+
 	static thread_local const bool many_neighbors =
 			g_settings->getBool("smooth_lighting")
 			&& !g_settings->getFlag("performance_tradeoffs");
@@ -367,11 +444,22 @@ void MeshUpdateManager::updateBlock(Map *map, v3s16 p, bool urgent, bool update_
 				m_queue_in.addBlock(map, p + dp, urgent, true);
 		}
 	}
+}
+
+void MeshUpdateManager::prepare()
+{
+	assert(std::this_thread::get_id() == m_main_thread);
+
+	// Keep enough inputs for workers to continue between client steps without
+	// allocating snapshots for the entire pending queue.
+	m_queue_in.prepare(2 * m_workers.size());
 	deferUpdate();
 }
 
 void MeshUpdateManager::putResult(MeshUpdateResult &&result)
 {
+	assert(std::this_thread::get_id() != m_main_thread);
+
 	if (result.urgent)
 		m_queue_out_urgent.push_back(std::move(result));
 	else
@@ -380,6 +468,8 @@ void MeshUpdateManager::putResult(MeshUpdateResult &&result)
 
 bool MeshUpdateManager::getNextResult(MeshUpdateResult &r)
 {
+	assert(std::this_thread::get_id() == m_main_thread);
+
 	if (!m_queue_out_urgent.empty())
 		r = m_queue_out_urgent.pop_frontNoEx();
 	else if (!m_queue_out.empty())
@@ -400,8 +490,10 @@ bool MeshUpdateManager::getNextResult(MeshUpdateResult &r)
 
 void MeshUpdateManager::forceRegenerate(Map *map, const std::vector<v3s16> &pp)
 {
+	assert(std::this_thread::get_id() == m_main_thread);
+
 	// This invalidates all previously produced results (if still pending)
-	m_queue_in.setEpoch(++m_epoch);
+	m_queue_in.advanceEpoch(++m_epoch);
 
 	verbosestream << "MeshUpdateManager: m_epoch=" << m_epoch << "; will queue "
 		<< pp.size() << " blocks to be updated" << std::endl;
@@ -409,11 +501,12 @@ void MeshUpdateManager::forceRegenerate(Map *map, const std::vector<v3s16> &pp)
 	for (v3s16 p : pp) {
 		m_queue_in.addBlock(map, p, false, false);
 	}
-	deferUpdate();
 }
 
 void MeshUpdateManager::clearAllQueues()
 {
+	assert(std::this_thread::get_id() == m_main_thread);
+
 	m_queue_in.clear();
 
 	const auto &do_it = [] (ResultQueue &queue) {
@@ -429,24 +522,32 @@ void MeshUpdateManager::clearAllQueues()
 
 void MeshUpdateManager::deferUpdate()
 {
+	assert(std::this_thread::get_id() == m_main_thread);
+
 	for (auto &thread : m_workers)
 		thread->deferUpdate();
 }
 
 void MeshUpdateManager::start()
 {
+	assert(std::this_thread::get_id() == m_main_thread);
+
 	for (auto &thread: m_workers)
 		thread->start();
 }
 
 void MeshUpdateManager::stop()
 {
+	assert(std::this_thread::get_id() == m_main_thread);
+
 	for (auto &thread: m_workers)
 		thread->stop();
 }
 
 void MeshUpdateManager::wait()
 {
+	assert(std::this_thread::get_id() == m_main_thread);
+
 	for (auto &thread: m_workers)
 		thread->wait();
 }
