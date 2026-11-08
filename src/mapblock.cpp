@@ -249,7 +249,7 @@ void MapBlock::reallocate(u32 count, MapNode n)
 {
 	assert(count == 1 || count == nodecount);
 	// For now monoblocks are disabled on the client.
-	// The client has known data races on the block's data (FIXME).
+	// Enabling client monoblocks is a separate optimization.
 	assert(!m_gamedef->isClient() || count == nodecount);
 
 	delete[] data;
@@ -265,7 +265,7 @@ void MapBlock::reallocate(u32 count, MapNode n)
 void MapBlock::tryShrinkNodes()
 {
 	// For now monoblocks are disabled on the client.
-	// The client has known data races on the block's data (FIXME).
+	// Enabling client monoblocks is a separate optimization.
 	if (m_gamedef->isClient())
 		return;
 
