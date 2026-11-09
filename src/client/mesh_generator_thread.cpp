@@ -195,13 +195,17 @@ void MeshUpdateQueue::advanceEpoch(u16 epoch)
 {
 	assert(std::this_thread::get_id() == m_main_thread);
 	m_epoch = epoch;
-	std::vector<QueuedMeshUpdate *> outdated;
+	std::deque<QueuedMeshUpdate *> outdated, outdated_urgent;
 	{
 		MutexAutoLock lock(m_mutex);
+		outdated_urgent.swap(m_queue_urgent);
 		outdated.swap(m_queue);
-		for (auto *q : outdated)
+		for (QueuedMeshUpdate *q : outdated_urgent)
+			m_inflight_blocks.erase(q->p);
+		for (QueuedMeshUpdate *q : outdated)
 			m_inflight_blocks.erase(q->p);
 	}
+	outdated.insert(outdated.begin(), outdated_urgent.begin(), outdated_urgent.end());
 	// Ready jobs have not been claimed. Return them to the main-thread
 	// queue, merging acknowledgements into any newer pending request.
 	for (auto *q : outdated) {
@@ -228,15 +232,24 @@ bool MeshUpdateQueue::prepareJob(QueuedMeshUpdate *q, size_t max_ready)
 	{
 		MutexAutoLock lock(m_mutex);
 		if (m_inflight_blocks.count(q->p)) {
-			auto ready = std::find_if(m_queue.begin(), m_queue.end(),
-					[q](const auto *job) { return job->p == q->p; });
-			if (ready == m_queue.end())
+			for (auto *queue : {&m_queue_urgent, &m_queue}) {
+				auto ready = std::find_if(queue->begin(), queue->end(),
+						[q](const auto *job) { return job->p == q->p; });
+				if (ready == queue->end())
+					continue;
+				// Promotion needs space in the urgent queue. Same-priority
+				// replacement does not increase either queue's size.
+				if (q->urgent && !(*ready)->urgent && m_queue_urgent.size() >= max_ready)
+					return false;
+				replaced.reset(*ready);
+				queue->erase(ready);
+				break;
+			}
+			if (!replaced)
 				return false; // Already running; keep the newer request pending.
-			replaced.reset(*ready);
-			m_queue.erase(ready);
 			// Keep the reservation while rebuilding the snapshot.
-		} else if (m_queue.size() >= max_ready * (q->urgent ? 2 : 1)) {
-			return false; // Full backlog; replacing a ready job is still allowed.
+		} else if ((q->urgent ? m_queue_urgent : m_queue).size() >= max_ready) {
+			return false;
 		}
 	}
 	if (replaced) {
@@ -253,7 +266,7 @@ bool MeshUpdateQueue::prepareJob(QueuedMeshUpdate *q, size_t max_ready)
 	{
 		MutexAutoLock lock(m_mutex);
 		m_inflight_blocks.insert(q->p);
-		m_queue.push_back(q);
+		(q->urgent ? m_queue_urgent : m_queue).push_back(q);
 	}
 	return true;
 }
@@ -284,16 +297,13 @@ QueuedMeshUpdate *MeshUpdateQueue::pop()
 {
 	assert(std::this_thread::get_id() != m_main_thread);
 	MutexAutoLock lock(m_mutex);
-	if (m_queue.empty())
+	auto &queue = m_queue_urgent.empty() ? m_queue : m_queue_urgent;
+	if (queue.empty())
 		return nullptr;
 
-	auto it = std::find_if(m_queue.begin(), m_queue.end(),
-			[](const auto *q) { return q->urgent; });
-	if (it == m_queue.end())
-		it = m_queue.begin();
-	auto *q = *it;
+	auto *q = queue.front();
 	assert(q->data);
-	m_queue.erase(it);
+	queue.pop_front();
 	return q;
 }
 
@@ -309,7 +319,7 @@ void MeshUpdateQueue::clear(bool finish)
 	assert(std::this_thread::get_id() == m_main_thread);
 	const auto clear_queue = [finish](auto &queue, auto on_remove) {
 		// Points to the current position for inserting retained jobs.
-		// Retained jobs are moved to the beginning of the vector, and then it's trimmed.
+		// Retained jobs are moved to the beginning of the container, and then it's trimmed.
 		auto out = queue.begin();
 		for (QueuedMeshUpdate *it : queue) {
 			// If we're in an active game session clearing updates that the
@@ -326,6 +336,7 @@ void MeshUpdateQueue::clear(bool finish)
 	};
 	clear_queue(m_pending, [](QueuedMeshUpdate *) {});
 	MutexAutoLock lock(m_mutex);
+	clear_queue(m_queue_urgent, [this](QueuedMeshUpdate *q) { m_inflight_blocks.erase(q->p); });
 	clear_queue(m_queue, [this](QueuedMeshUpdate *q) { m_inflight_blocks.erase(q->p); });
 }
 

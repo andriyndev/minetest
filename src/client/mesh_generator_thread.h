@@ -5,6 +5,7 @@
 #pragma once
 
 #include <ctime>
+#include <deque>
 #include <cassert>
 #include <thread>
 #include <mutex>
@@ -102,7 +103,7 @@ public:
 		assert(std::this_thread::get_id() == m_main_thread);
 
 		MutexAutoLock lock(m_mutex);
-		return m_pending.size() + m_queue.size();
+		return m_pending.size() + m_queue.size() + m_queue_urgent.size();
 	}
 
 	/// Main thread only. With finish, also clears jobs awaiting acknowledgement.
@@ -115,7 +116,8 @@ private:
 	// Main thread only. Entries have no snapshot and can be coalesced.
 	std::vector<QueuedMeshUpdate *> m_pending;
 	// Protected by m_mutex. Entries own complete snapshots.
-	std::vector<QueuedMeshUpdate *> m_queue;
+	std::deque<QueuedMeshUpdate *> m_queue;
+	std::deque<QueuedMeshUpdate *> m_queue_urgent;
 	// Positions reserved by ready or running jobs.
 	std::unordered_set<v3s16> m_inflight_blocks;
 	u16 m_epoch = 0;
