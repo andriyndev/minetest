@@ -108,9 +108,13 @@ public:
 	void clear();
 
 private:
+	friend class TestMeshUpdateQueue;
+	// Queue-only tests do not need a Client or snapshot preparation settings.
+	MeshUpdateQueue() = default;
+
 	// Constructed by Client on the main thread; immutable after publication.
 	const std::thread::id m_main_thread = std::this_thread::get_id();
-	Client *m_client;
+	Client *m_client = nullptr;
 	// Main thread only. Entries have no snapshot and can be coalesced.
 	std::vector<QueuedMeshUpdate *> m_pending;
 	// Protected by m_mutex. Entries own complete snapshots.
@@ -122,11 +126,13 @@ private:
 	std::mutex m_mutex;
 
 	// TODO: Add callback to update these when g_settings changes, and update all meshes
-	bool m_cache_smooth_lighting;
-	bool m_cache_enable_water_reflections;
-	bool m_cache_enable_waving_water;
+	bool m_cache_smooth_lighting = false;
+	bool m_cache_enable_water_reflections = false;
+	bool m_cache_enable_waving_water = false;
 
 	// Main thread: publish a snapshot if eligible; false leaves the job pending.
+	// Check capacity/running jobs and merge any superseded ready request.
+	bool makeRoomForJob(QueuedMeshUpdate *q, size_t max_ready);
 	bool prepareJob(QueuedMeshUpdate *q, size_t max_ready);
 	void fillDataFromMapBlocks(QueuedMeshUpdate *q);
 };
