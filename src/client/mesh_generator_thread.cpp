@@ -225,7 +225,7 @@ void MeshUpdateQueue::advanceEpoch(u16 epoch)
 	}
 }
 
-bool MeshUpdateQueue::prepareJob(QueuedMeshUpdate *q, size_t max_ready)
+bool MeshUpdateQueue::makeRoomForJob(QueuedMeshUpdate *q, size_t max_ready)
 {
 	assert(std::this_thread::get_id() == m_main_thread);
 	UnqueuedMeshUpdate replaced;
@@ -261,6 +261,13 @@ bool MeshUpdateQueue::prepareJob(QueuedMeshUpdate *q, size_t max_ready)
 		replaced.reset();
 	}
 
+	return true;
+}
+
+bool MeshUpdateQueue::prepareJob(QueuedMeshUpdate *q, size_t max_ready)
+{
+	if (!makeRoomForJob(q, max_ready))
+		return false;
 	fillDataFromMapBlocks(q);
 	q->epoch = m_epoch;
 	{
@@ -274,8 +281,10 @@ bool MeshUpdateQueue::prepareJob(QueuedMeshUpdate *q, size_t max_ready)
 void MeshUpdateQueue::prepare(size_t max_ready)
 {
 	assert(std::this_thread::get_id() == m_main_thread);
-	ScopeProfiler sp(g_profiler, "Client: Mesh input preparation (sum)");
-	const u64 deadline = porting::getTimeUs() + 2000;
+	const u64 started = porting::getTimeUs();
+	const u64 deadline = started + 2000;
+	size_t prepared = 0;
+	bool budget_exhausted = false;
 
 	for (bool urgent : {true, false}) {
 		for (auto it = m_pending.begin(); it != m_pending.end();) {
@@ -285,17 +294,41 @@ void MeshUpdateQueue::prepare(size_t max_ready)
 			}
 			// prepareJob published the job; do not dereference it again.
 			it = m_pending.erase(it);
-			if (porting::getTimeUs() >= deadline)
-				return;
+			++prepared;
+			if (porting::getTimeUs() >= deadline) {
+				budget_exhausted = true;
+				break;
+			}
 		}
+		if (budget_exhausted)
+			break;
 	}
+
+	const float elapsed_us = porting::getTimeUs() - started;
+	// Sample once per client step, including idle steps. Keep profiler locking
+	// outside the queue lock so workers can continue consuming prepared jobs.
+	size_t ready, urgent, running;
+	{
+		MutexAutoLock lock(m_mutex);
+		ready = m_queue.size();
+		urgent = m_queue_urgent.size();
+		running = m_inflight_blocks.size() - ready - urgent;
+	}
+	g_profiler->add("Client: Mesh input preparation (sum)", elapsed_us / 1000.f);
+	g_profiler->max("Mesh preparation: step [us]", elapsed_us);
+	g_profiler->add("Mesh preparation: jobs", prepared);
+	g_profiler->add("Mesh preparation: budget exhausted", budget_exhausted);
+	g_profiler->avg("Mesh queue: pending", m_pending.size());
+	g_profiler->max("Mesh queue: pending peak", m_pending.size());
+	g_profiler->avg("Mesh queue: ready normal", ready);
+	g_profiler->avg("Mesh queue: ready urgent", urgent);
+	g_profiler->avg("Mesh queue: running", running);
 }
 
 // Returned pointer must be deleted
 // Returns NULL if no prepared, eligible job is available
 QueuedMeshUpdate *MeshUpdateQueue::pop()
 {
-	assert(std::this_thread::get_id() != m_main_thread);
 	MutexAutoLock lock(m_mutex);
 	auto &queue = m_queue_urgent.empty() ? m_queue : m_queue_urgent;
 	if (queue.empty())
@@ -309,7 +342,6 @@ QueuedMeshUpdate *MeshUpdateQueue::pop()
 
 void MeshUpdateQueue::done(v3s16 pos)
 {
-	assert(std::this_thread::get_id() != m_main_thread);
 	MutexAutoLock lock(m_mutex);
 	m_inflight_blocks.erase(pos);
 }
@@ -478,7 +510,6 @@ void MeshUpdateManager::prepare()
 
 void MeshUpdateManager::putResult(MeshUpdateResult &&result)
 {
-	assert(std::this_thread::get_id() != m_main_thread);
 	if (result.urgent)
 		m_queue_out_urgent.push_back(std::move(result));
 	else

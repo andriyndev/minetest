@@ -1,5 +1,48 @@
 # Profiling
 
+## Comparing client mesh preparation
+
+Use the same build type, world, route, view range, mesh worker count and FPS
+limit for both builds. Prefer `RelWithDebInfo` for performance comparisons.
+Visit an already-generated area to reduce variation from map generation, and
+restart the client before each run. Repeat each run several times, alternating
+builds; a single run can be affected by filesystem caches and server load.
+
+Set `profiler_print_interval = 1` in the configuration and record a separate log
+for each run:
+
+```sh
+./bin/luanti --info --logfile /tmp/luanti-mesh-patched-1.log
+```
+
+Record the build revision, configuration, start position and route with the log.
+Move along the route, then remain stationary until loading finishes. Record when
+you stopped moving so that the remaining loading time can be compared. FPS alone
+is insufficient when both builds reach the configured FPS limit.
+
+The main-thread mesh preparation profiler reports these values per logging
+interval:
+
+* `Client: Mesh input preparation (sum)`: total preparation time in milliseconds.
+* `Mesh preparation: step [us]`: maximum preparation time in a client step.
+* `Mesh preparation: jobs`: snapshots prepared, including replacements of ready
+  jobs; this is not a count of completed meshes.
+* `Mesh preparation: budget exhausted`: steps that reached the preparation time
+  limit after preparing a job. One snapshot can exceed the limit, and scanning
+  deferred requests can also take time.
+* `Mesh queue: pending` and `pending peak`: average and maximum pending count.
+* `Mesh queue: ready normal`, `ready urgent` and `running`: average job counts
+  sampled after preparation. These are not worker utilization measurements.
+
+The queue samples exclude completed results waiting for the client to apply
+them. Empty input queues alone therefore do not establish that all meshes are
+visible. The preparation timer excludes reporting these profiler measurements.
+
+Older builds may lack these metrics. Compare common measurements and visible
+loading time across builds, and use the new metrics to explain the patched
+build's behavior. For individual frame stalls and CPU hotspots, use the tracing
+or sampling tools described below rather than interval averages alone.
+
 ## Using builtin's mod profiler
 
 Builtin has a profiler for callbacks registered by mods. It measures how much
