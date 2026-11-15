@@ -389,6 +389,9 @@ See below for description.
       is mostly filled with `CONTENT_IGNORE` and is likely to contain e.g. parts
       of trees of neighboring blocks.
 
+    * `0x10`: `monoblock`: Added in version 30. All nodes have identical content,
+      param1 and param2. The node data contains one node instead of 4096.
+
 `u16` lighting_complete
 * Added in version 27.
 
@@ -438,6 +441,9 @@ Timestamp and node ID mappings come here if map format version >= 29.
 
 ## Node Data
 > **Note**: Zlib-compressed before map format version 29
+
+In version 30 and above, when flag `0x10` is set, each array below has
+length 1 instead of 4096. Its values apply to every node in the block.
 
 * If `content_width` is 1:
     * `u8[4096]`: `param0` fields

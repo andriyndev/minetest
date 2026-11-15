@@ -12,6 +12,8 @@
 #include "inventory.h"
 #include "util/serialize.h"
 #include "voxel.h"
+#include "dummygamedef.h"
+#include "nameidmapping.h"
 
 class TestMapBlock : public TestBase
 {
@@ -38,6 +40,7 @@ public:
 
 	// Tests blocks with a single recurring node
 	void testMonoblock(IGameDef *gamedef);
+	void testClientMonoblock(IGameDef *gamedef);
 };
 
 static TestMapBlock g_test_instance;
@@ -51,6 +54,7 @@ void TestMapBlock::runTests(IGameDef *gamedef)
 	TEST(testLoad20, gamedef);
 	TEST(testLoadNonStd, gamedef);
 	TEST(testMonoblock, gamedef);
+	TEST(testClientMonoblock, gamedef);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -152,6 +156,44 @@ void TestMapBlock::testMonoblock(IGameDef *gamedef)
 	block.setNode(5,5,5,MapNode(42));
 	block.tryShrinkNodes();
 	UASSERT(block.m_is_mono_block);
+}
+
+void TestMapBlock::testClientMonoblock(IGameDef *gamedef)
+{
+	// Exercise the existing shrink, edit and voxel-copy cases as a client too.
+	testMonoblock(gamedef);
+
+	// Uniformity scanning is a fallback for formats without a monoblock flag.
+	for (u8 version = SER_FMT_VER_LOWEST_WRITE; version < 30; ++version) {
+		MapBlock source({}, gamedef), received({}, gamedef);
+		const MapNode uniform(CONTENT_AIR, 0xff, 0);
+		std::fill_n(source.data, MapBlock::nodecount, uniform);
+		const auto receive = [&] {
+			std::stringstream stream;
+			source.serialize(stream, version, false, -1);
+			received.deSerialize(stream, version, false);
+			for (s16 z = 0; z < MAP_BLOCKSIZE; ++z)
+			for (s16 y = 0; y < MAP_BLOCKSIZE; ++y)
+			for (s16 x = 0; x < MAP_BLOCKSIZE; ++x)
+				UASSERT(received.getNodeNoCheck({x, y, z}) ==
+						source.getNodeNoCheck({x, y, z}));
+		};
+		receive();
+		UASSERT(received.m_is_mono_block);
+
+		// Even a difference at the last node must prevent shrinking. Each
+		// update also expands the previously received monoblock safely.
+		const v3s16 last(MAP_BLOCKSIZE - 1);
+		for (MapNode different : {MapNode(CONTENT_IGNORE, 0xff, 0),
+				MapNode(CONTENT_AIR, 0xfe, 0), MapNode(CONTENT_AIR, 0xff, 1)}) {
+			source.setNode(last, different);
+			receive();
+			UASSERT(!received.m_is_mono_block);
+			source.setNode(last, uniform);
+			receive();
+			UASSERT(received.m_is_mono_block);
+		}
+	}
 }
 
 void TestMapBlock::testSaveLoad(IGameDef *gamedef, const u8 version)

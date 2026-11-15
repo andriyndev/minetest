@@ -449,7 +449,7 @@ private:
 	static void getBlockNodeIdMapping(NameIdMapping *nimap, MapNode *nodes,
 		u32 count, const NodeDefManager *nodedef);
 	static void correctBlockNodeIds(const NameIdMapping *nimap, MapNode *nodes,
-			IGameDef *gamedef);
+			IGameDef *gamedef, u32 count = nodecount);
 
 	/*
 	 * PLEASE NOTE: When adding something here be mindful of position and size

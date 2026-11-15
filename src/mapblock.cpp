@@ -248,9 +248,6 @@ void MapBlock::copyFrom(const VoxelManipulator &src)
 void MapBlock::reallocate(u32 count, MapNode n)
 {
 	assert(count == 1 || count == nodecount);
-	// For now monoblocks are disabled on the client.
-	// Enabling client monoblocks is a separate optimization.
-	assert(!m_gamedef->isClient() || count == nodecount);
 
 	delete[] data;
 	if (data && !m_is_mono_block && count == 1)
@@ -264,11 +261,6 @@ void MapBlock::reallocate(u32 count, MapNode n)
 
 void MapBlock::tryShrinkNodes()
 {
-	// For now monoblocks are disabled on the client.
-	// Enabling client monoblocks is a separate optimization.
-	if (m_gamedef->isClient())
-		return;
-
 	if (m_is_mono_block)
 		return;
 
@@ -361,14 +353,14 @@ void MapBlock::getBlockNodeIdMapping(NameIdMapping *nimap, MapNode *nodes,
 // Unknown ones are added to nodedef.
 // Will not update itself to match id-name pairs in nodedef.
 void MapBlock::correctBlockNodeIds(const NameIdMapping *nimap, MapNode *nodes,
-		IGameDef *gamedef)
+		IGameDef *gamedef, u32 count)
 {
 	const NodeDefManager *nodedef = gamedef->ndef();
 
 	// Used to cache local to global id lookup.
 	IdIdMapping &mapping_cache = IdIdMapping::giveClearedThreadLocalInstance();
 
-	for (u32 i = 0; i < MapBlock::nodecount; i++) {
+	for (u32 i = 0; i < count; i++) {
 		content_t local_id = nodes[i].getContent();
 
 		if (auto found = mapping_cache.get(local_id); found != 0xFFFF) {
@@ -405,6 +397,9 @@ void MapBlock::serialize(std::ostream &os_compressed, u8 version, bool disk, int
 	my_ostringstream os_raw;
 	std::ostream &os = version >= 29 ? os_raw : os_compressed;
 
+	const bool serialize_mono = version >= 30 && m_is_mono_block;
+	const u32 serialized_nodecount = serialize_mono ? 1 : nodecount;
+
 	// First byte
 	u8 flags = 0;
 	if(is_underground)
@@ -418,6 +413,8 @@ void MapBlock::serialize(std::ostream &os_compressed, u8 version, bool disk, int
 		flags |= 0x02;
 	if (!m_generated)
 		flags |= 0x08;
+	if (serialize_mono)
+		flags |= 0x10;
 	writeU8(os, flags);
 	if (version >= 27) {
 		writeU16(os, m_lighting_complete);
@@ -437,7 +434,7 @@ void MapBlock::serialize(std::ostream &os_compressed, u8 version, bool disk, int
 		std::copy_n(data, size, tmp_nodes.get());
 		getBlockNodeIdMapping(&nimap, tmp_nodes.get(), size, m_gamedef->ndef());
 
-		buf = MapNode::serializeBulk(version, tmp_nodes.get(), nodecount,
+		buf = MapNode::serializeBulk(version, tmp_nodes.get(), serialized_nodecount,
 				content_width, params_width, m_is_mono_block);
 
 		// write timestamp and node/id mapping first
@@ -449,7 +446,7 @@ void MapBlock::serialize(std::ostream &os_compressed, u8 version, bool disk, int
 	}
 	else
 	{
-		buf = MapNode::serializeBulk(version, data, nodecount,
+		buf = MapNode::serializeBulk(version, data, serialized_nodecount,
 				content_width, params_width, m_is_mono_block);
 	}
 
@@ -533,13 +530,19 @@ void MapBlock::deSerialize(std::istream &in_compressed, u8 version, bool disk)
 void MapBlock::deSerializeUncompressed(std::istream &is, u8 version, bool disk)
 {
 	m_is_air_expired = true;
-	expandNodesIfNeeded();
 	assert(version >= 29);
 
 	u8 flags = readU8(is);
 	is_underground = (flags & 0x01) != 0;
-	// IMPORTANT: when the version is bumped to 30 we can read m_is_air from here
-	// m_is_air = (flags & 0x02) == 0;
+	// Keep deriving isAir from node data, as for older formats.
+	const bool serialized_mono = version >= 30 && (flags & 0x10);
+	const u32 serialized_nodecount = serialized_mono ? 1 : nodecount;
+	if (serialized_mono) {
+		if (!m_is_mono_block)
+			reallocate(1, MapNode(CONTENT_IGNORE));
+	} else {
+		expandNodesIfNeeded();
+	}
 
 	m_lighting_complete = readU16(is);
 	m_generated = (flags & 0x08) == 0;
@@ -570,7 +573,7 @@ void MapBlock::deSerializeUncompressed(std::istream &is, u8 version, bool disk)
 	/*
 		Bulk node data
 	*/
-	MapNode::deSerializeBulk(is, version, data, nodecount,
+	MapNode::deSerializeBulk(is, version, data, serialized_nodecount,
 		content_width, params_width);
 
 	/*
@@ -590,7 +593,7 @@ void MapBlock::deSerializeUncompressed(std::istream &is, u8 version, bool disk)
 		m_static_objects.deSerialize(is);
 
 		// Dynamically re-set ids based on node names
-		correctBlockNodeIds(&nimap, data, m_gamedef);
+		correctBlockNodeIds(&nimap, data, m_gamedef, serialized_nodecount);
 
 		TRACESTREAM(<<"MapBlock::deSerialize "<<getPos()
 				<<": Node timers (ver>=25)"<<std::endl);
@@ -603,7 +606,10 @@ void MapBlock::deSerializeUncompressed(std::istream &is, u8 version, bool disk)
 			m_is_air = nimap.getId("air", dummy);
 			m_is_air_expired = false;
 		}
-	}
+	} else if (version < 30)
+		// Network data has no node-ID mapping to cheaply rule out mixed blocks.
+		// Scan once after reception; stop at the first differing node.
+		tryShrinkNodes();
 
 	TRACESTREAM(<<"MapBlock::deSerialize "<<getPos()
 			<<": Done."<<std::endl);
@@ -751,7 +757,8 @@ void MapBlock::deSerialize_pre29(std::istream &is, u8 version, bool disk)
 			m_is_air = nimap.getId("air", dummy);
 			m_is_air_expired = false;
 		}
-	}
+	} else
+		tryShrinkNodes();
 
 	TRACESTREAM(<<"MapBlock::deSerialize "<<getPos()
 			<<": Done."<<std::endl);
